@@ -1,4 +1,4 @@
-#include <opencv2/opencv.hpp>
+/*#include <opencv2/opencv.hpp>
 #include <opencv2/objdetect/aruco_detector.hpp>
 #include <iostream>
 #include <vector>
@@ -110,3 +110,4 @@ int main() {
     std::cout << "\nParameters successfully written to disk ('camera_calibration.xml')." << std::endl;
     return 0;
 }
+*/
