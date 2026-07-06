@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CHArUco Camera Calibration</title>
+    <title>Camera Calibration</title>
     <script src="js/jquery.js"></script>
     <script src="js/jquery-ui.js"></script>
     <link href="css/jquery-ui.css" rel="stylesheet">
@@ -26,16 +26,115 @@
             </nav>
         </section>
     </header>
+    <div id="container" class="constrain">
         <div id="content-wrapper" class="clearfix row">
             <div class="content-right twelve columns">
                 <div id="content">
-                    <h1>This document is unfinished! No calibration can happen here!</h1>
                     <img src="" id="mjpegStream" width="640" height="480">
+                    <button onclick="takeSnapshot()">Take Snapshot</button><p id="snapshotAmount">0</p><p>/10 Snapshots Taken</p>
+                    <button onclick="startCalibration()">Start Calibration</button>
+                </div>
+                <div id="sidebar" class="widget-area">
+                    <aside class="widget">
+                        <p>
+                            <label for="squaresX-amount">Squares X:</label>
+                            <input type="text" id="squaresX-amount" readonly=""
+                                style="border:0; color:#f6931f; font-weight:bold;">
+                        </p>
+
+                        <div id="squaresX"></div>
+                    </aside>
+
+                    <aside class="widget">
+                        <p>
+                            <label for="squaresY-amount">Squares Y:</label>
+                            <input type="text" id="squaresY-amount" readonly=""
+                                style="border:0; color:#f6931f; font-weight:bold;">
+                        </p>
+
+                        <div id="squaresY"></div>
+                    </aside>
+
+                    <aside class="widget">
+                        <p>
+                            <label for="squareLength-amount">Square Length (mm):</label>
+                            <input type="text" id="squareLength-amount" readonly=""
+                                style="border:0; color:#f6931f; font-weight:bold;">
+                        </p>
+
+                        <div id="squareLength"></div>
+                    </aside>
+
+                    <aside class="widget">
+                        <p>
+                            <label for="markerLength-amount">Marker Length (mm):</label>
+                            <input type="text" id="markerLength-amount" readonly=""
+                                style="border:0; color:#f6931f; font-weight:bold;">
+                        </p>
+
+                        <div id="markerLength"></div>
+                    </aside>
+
+                    <aside class="widget">
+                        <button id="updateConfigButton" onclick="updateConfigFromSliders()">Update Config</button>
+                    </aside>
                 </div>
             </div>
         </div>
     </div>
     <script>
+        $(function () {
+            $("#exposure").slider({
+                range: "min",
+                value: 25,
+                min: -100,
+                max: 100,
+                slide: function (event, ui) {
+                    $("#exposure-amount").val("" + ui.value);
+                }
+            });
+            $("#exposure-amount").val("" + $("#exposure").slider("value"));
+        });
+
+        $(function () {
+            $("#brightness").slider({
+                range: "min",
+                value: 50,
+                min: -64,
+                max: 64,
+                slide: function (event, ui) {
+                    $("#brightness-amount").val("" + ui.value);
+                }
+            });
+            $("#brightness-amount").val("" + $("#brightness").slider("value"));
+        });
+
+        $(function () {
+            $("#brightness").slider({
+                range: "min",
+                value: 50,
+                min: -64,
+                max: 64,
+                slide: function (event, ui) {
+                    $("#brightness-amount").val("" + ui.value);
+                }
+            });
+            $("#brightness-amount").val("" + $("#brightness").slider("value"));
+        });
+
+        $(function () {
+            $("#brightness").slider({
+                range: "min",
+                value: 50,
+                min: -64,
+                max: 64,
+                slide: function (event, ui) {
+                    $("#brightness-amount").val("" + ui.value);
+                }
+            });
+            $("#brightness-amount").val("" + $("#brightness").slider("value"));
+        });
+
         async function fetchStreamPort() {
             try {
                 const response = await fetch('/streamport');
@@ -61,6 +160,20 @@
                 console.error('Error starting stream:', error);
             }
         }
+
+        function updateConfigFromSliders() {
+            const exposureValue = $("#exposure").slider("value");
+            const brightnessValue = $("#brightness").slider("value");
+            const autoexposureValue = $("#autoexposure").is(":checked") ? 3.0 : 0.0; // 3.0 for auto, 0.0 for manual
+
+            updateConfigKey('camera_exposure', exposureValue);
+            updateConfigKey('camera_brightness', brightnessValue);
+            updateConfigKey('camera_autoexposure', autoexposureValue);
+
+            // Queue camera settings refresh
+            queueCameraSettingsRefresh();
+        }
+
         startStream();
     </script>
 </body>

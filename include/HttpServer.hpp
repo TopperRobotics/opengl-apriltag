@@ -28,6 +28,9 @@ public:
     bool isCameraSettingsRefreshQueued();
     void clearCameraSettingsRefreshQueue();
 
+    bool isCameraSnapshotQueued();
+    void clearCameraSnapshotQueue();
+
 private:
     int port_;
     SharedResults& results_;

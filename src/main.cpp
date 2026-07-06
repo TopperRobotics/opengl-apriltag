@@ -61,6 +61,7 @@ struct Options {
     int httpPort = 8080;
     int cameraStreamPort = 8081;
     std::string webuiDir = "webui";
+    std::string cameraSnapshotDir = "snapshot";
 };
 
 Options parseArgs(int argc, char** argv) {
@@ -76,13 +77,16 @@ Options parseArgs(int argc, char** argv) {
         } else if (arg == "--port" && i + 1 < argc) {
             opts.httpPort = std::stoi(argv[++i]);
         } else if (arg == "--help") {
-            std::cout << "Usage: apriltag [--camera N] [--db path] [--shaders dir] [--port N] [--webui dir]\n";
+            std::cout << "Usage: apriltag [--camera N] [--db path] [--shaders dir] [--port N] [--webui dir] [--snapshot dir]\n";
             std::exit(0);
         } else if (arg == "--webui" && i + 1 < argc) {
             opts.webuiDir = argv[++i];
         } else if (arg == "--camera-stream-port" && i + 1 < argc) {
             opts.cameraStreamPort = std::stoi(argv[++i]);
+        }  else if (arg == "--snapshot" && i + 1 < argc) {
+            opts.webuiDir = argv[++i];
         }
+        
 
     }
     return opts;
@@ -259,6 +263,12 @@ int main(int argc, char** argv) {
             capture.set(cv::CAP_PROP_BRIGHTNESS, config.getDouble("camera_brightness", 0.5));
             capture.set(cv::CAP_PROP_AUTO_EXPOSURE , config.getDouble("camera_autoexposure", 0.75)); // i have no idea what this could be
             httpServer.clearCameraSettingsRefreshQueue();
+        }
+
+        if(httpServer.isCameraSnapshotQueued()){
+            std::cout << "Saving snapshot to " << opts.cameraSnapshotDir + "/image" + result.timestamp + ".jpg" << std::endl;
+            cv::imwrite(opts.cameraSnapshotDir + "/image" + result.timestamp + ".jpg");
+            httpServer.clearCameraSnapshotQueue();
         }
 
         glfwPollEvents();

@@ -45,6 +45,16 @@ void HttpServer::clearCameraSettingsRefreshQueue() {
     queuedCameraSettingsRefresh = false;
 }
 
+bool queuedCameraSnapshot = false;
+
+bool HttpServer::isCameraSnapshotQueued() {
+    return queuedCameraSnapshot;
+}
+
+void HttpServer::clearCameraSnapshotQueue() {
+    queuedCameraSnapshot = false;
+}
+
 namespace {
 
 double nowSeconds() {
@@ -173,6 +183,13 @@ void HttpServer::start() {
         queuedCameraSettingsRefresh = true;
         res.status = 200;
     });
+
+    svr.Get("/takecamerasnapshot", [](const httplib::Request&, httplib::Response& res) {
+        queuedCameraSnapshot = true;
+        res.status = 200;
+    });
+
+    
 
     // handler for other files in the webuiDir
     svr.set_mount_point("/", webuiDir.c_str());
