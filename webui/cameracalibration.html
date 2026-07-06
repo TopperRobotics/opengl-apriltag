@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CHArUco Camera Calibration</title>
+    <script src="js/jquery.js"></script>
+    <script src="js/jquery-ui.js"></script>
+    <link href="css/jquery-ui.css" rel="stylesheet">
+    <link href="css/base.css" rel="stylesheet">
+</head>
+
+<body
+    class="api jquery-ui wp-singular post-template-default single single-post postid-136 single-format-standard wp-theme-jquery wp-child-theme-apijqueryuicom single-author singular">
+    <header>
+        <section id="global-nav">
+            <nav>
+                <div class="constrain">
+                    <ul>
+                        <li class="project"><a href="/">Home</a></li>
+                        <li class="project"><a href="settings.html">Settings</a></li>
+                        <li class="project"><a href="cameracalibration.html">Camera Calibration</a></li>
+                    </ul>
+                </div>
+            </nav>
+        </section>
+    </header>
+        <div id="content-wrapper" class="clearfix row">
+            <div class="content-right twelve columns">
+                <div id="content">
+                    <h1>This document is unfinished! No calibration can happen here!</h1>
+                    <img src="" id="mjpegStream" width="640" height="480">
+                </div>
+            </div>
+        </div>
+    </div>
+    <script>
+        async function fetchStreamPort() {
+            try {
+                const response = await fetch('/streamport');
+                const data = await response.json();
+                console.log(data.port);
+                return data.port;
+            } catch (error) {
+                console.error('Error fetching stream port:', error);
+                return null;
+            }
+        }
+        async function startStream() {
+            const port = await fetchStreamPort();
+            if (port) {
+                document.getElementById('mjpegStream').src = '//' + window.location.hostname + ':' + port + '/';
+            } else {
+                console.error('Failed to fetch stream port.');
+            }
+
+            try {
+                await fetch('/stream');
+            } catch (error) {
+                console.error('Error starting stream:', error);
+            }
+        }
+        startStream();
+    </script>
+</body>
+
+</html>

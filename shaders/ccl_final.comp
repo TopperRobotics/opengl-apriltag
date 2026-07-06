@@ -1,0 +1,36 @@
+#version 430 core
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(r32ui) uniform readonly uimage2D u_labelIn;
+layout(r32ui) uniform writeonly uimage2D u_labelOut;
+layout(std430, binding = 0) buffer UFBuffer {
+    uint uf[];
+};
+
+uniform ivec2 u_imageSize;
+
+uint find(uint i) {
+    uint p = i;
+    while (uf[p] != p) {
+        p = uf[p];
+    }
+    uint q = i;
+    while (uf[q] != q) {
+        uint next = uf[q];
+        uf[q] = p;
+        q = next;
+    }
+    return p;
+}
+
+void main() {
+    ivec2 pix = ivec2(gl_GlobalInvocationID.xy);
+    if (pix.x >= u_imageSize.x || pix.y >= u_imageSize.y) return;
+
+    uint label = imageLoad(u_labelIn, pix).r;
+    if (label == 0u) {
+        imageStore(u_labelOut, pix, uvec4(0u));
+    } else {
+        imageStore(u_labelOut, pix, uvec4(find(label)));
+    }
+}

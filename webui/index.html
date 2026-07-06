@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+    <script src="js/jquery.js"></script>
+    <script src="js/jquery-ui.js"></script>
+    <link href="css/jquery-ui.css" rel="stylesheet">
+    <link href="css/base.css" rel="stylesheet">
+</head>
+
+<body
+    class="api jquery-ui wp-singular post-template-default single single-post postid-136 single-format-standard wp-theme-jquery wp-child-theme-apijqueryuicom single-author singular">
+    <header>
+        <section id="global-nav">
+            <nav>
+                <div class="constrain">
+                    <ul>
+                        <li class="project"><a href="/">Home</a></li>
+                        <li class="project"><a href="settings.html">Settings</a></li>
+                        <li class="project"><a href="cameracalibration.html">Camera Calibration</a></li>
+                    </ul>
+                </div>
+            </nav>
+        </section>
+    </header>
+    <div id="container" class="constrain">
+        <div id="content-wrapper" class="clearfix row">
+            <div class="content-right twelve columns">
+                <div id="content">
+                    <img src="" id="mjpegStream" width="640" height="480">
+                    <h3>AprilTag Detections</h3>
+                    <table id="detectionsTable" border="1">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Yaw</th> <!-- ypr -->
+                                <th>Pitch</th>
+                                <th>Roll</th>
+                                <th>X</th>
+                                <th>Y</th>
+                                <th>Z</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+                <div id="sidebar" class="widget-area">
+                    <aside class="widget">
+                        <p>
+                            <label for="exposure-amount">Exposure:</label>
+                            <input type="text" id="exposure-amount" readonly=""
+                                style="border:0; color:#f6931f; font-weight:bold;">
+                        </p>
+
+                        <div id="exposure"></div>
+                    </aside>
+
+                    <aside class="widget">
+                        <p>
+                            <label for="brightness-amount">Brightness:</label>
+                            <input type="text" id="brightness-amount" readonly=""
+                                style="border:0; color:#f6931f; font-weight:bold;">
+                        </p>
+
+                        <div id="brightness"></div>
+                    </aside>
+
+                    <aside class="widget">
+                        <p>
+                            <label for="autoexposure">Auto Exposure:</label>
+                            <input type="checkbox" id="autoexposure">
+                        </p>
+                    </aside>
+
+                    <aside class="widget">
+                        <button id="updateConfigButton" onclick="updateConfigFromSliders()">Update Config</button>
+                    </aside>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script>
+        $(function () {
+            $("#exposure").slider({
+                range: "min",
+                value: 25,
+                min: -100,
+                max: 100,
+                slide: function (event, ui) {
+                    $("#exposure-amount").val("" + ui.value);
+                }
+            });
+            $("#exposure-amount").val("" + $("#exposure").slider("value"));
+        });
+
+        $(function () {
+            $("#brightness").slider({
+                range: "min",
+                value: 50,
+                min: -64,
+                max: 64,
+                slide: function (event, ui) {
+                    $("#brightness-amount").val("" + ui.value);
+                }
+            });
+            $("#brightness-amount").val("" + $("#brightness").slider("value"));
+        });
+
+        // autoexposure checkbox, on for autoexposure, off for manual exposure
+        $(function () {
+            $("#autoexposure").change(function () {
+                const isChecked = $(this).is(":checked");
+                updateConfigKey('camera_autoexposure', isChecked ? 3.0 : 0.0);
+                queueCameraSettingsRefresh();
+            });
+        });
+    
+
+        async function fetchPoses() {
+            try {
+                const response = await fetch('/api/estimatedpose');
+                const data = await response.json();
+                console.log(data);
+                return data.poses;
+            } catch (error) {
+                console.error('Error fetching estimated poses:', error);
+                return null;
+            }
+        }
+
+        function updateDetectionsTable(poses) {
+            const tbody = document.getElementById('detectionsTable').getElementsByTagName('tbody')[0];
+            tbody.innerHTML = ''; // Clear existing rows
+            if (poses.length > 0) {
+                poses.forEach(pose => {
+                    const row = tbody.insertRow();
+                    row.insertCell().textContent = pose.id;
+                    const eulerAngles = rotationMatrixToEulerAngles(pose.rotation);
+                    row.insertCell().textContent = eulerAngles[0].toFixed(2);
+                    row.insertCell().textContent = eulerAngles[1].toFixed(2);
+                    row.insertCell().textContent = eulerAngles[2].toFixed(2);
+                    const translations = pose.translation;
+                    row.insertCell().textContent = translations[0].toFixed(2);
+                    row.insertCell().textContent = translations[1].toFixed(2);
+                    row.insertCell().textContent = translations[2].toFixed(2);
+                });
+            }
+        }
+
+        function rotationMatrixToEulerAngles(R) {
+            const sy = Math.sqrt(R[0][0] * R[0][0] + R[1][0] * R[1][0]);
+            let x, y, z;
+            if (sy < 1e-6) { // singular
+                x = Math.atan2(-R[1][2], R[1][1]);
+                y = Math.atan2(-R[2][0], sy);
+                z = 0;
+            } else {
+                x = Math.atan2(R[2][1], R[2][2]);
+                y = Math.atan2(-R[2][0], sy);
+                z = Math.atan2(R[1][0], R[0][0]);
+            }
+            return [x, y, z];
+        }
+
+        async function fetchStreamPort() {
+            try {
+                const response = await fetch('/streamport');
+                const data = await response.json();
+                console.log(data.port);
+                return data.port;
+            } catch (error) {
+                console.error('Error fetching stream port:', error);
+                return null;
+            }
+        }
+        async function startStream() {
+            const port = await fetchStreamPort();
+            if (port) {
+                document.getElementById('mjpegStream').src = '//' + window.location.hostname + ':' + port + '/';
+            } else {
+                console.error('Failed to fetch stream port.');
+            }
+
+            try {
+                await fetch('/stream');
+            } catch (error) {
+                console.error('Error starting stream:', error);
+            }
+        }
+
+        async function getConfigKey(key) {
+            try {
+                const response = await fetch('/getconfig');
+                const data = await response.json();
+                console.log(data);
+                return data[key];
+            } catch (error) {
+                console.error('Error fetching config:', error);
+                return null;
+            }
+        }
+
+        function populateSliders() {
+            getConfigKey('camera_exposure').then(value => {
+                if (value !== null) {
+                    $("#exposure").slider("value", value);
+                    $("#exposure-amount").val("" + value);
+                }
+            });
+
+            getConfigKey('camera_brightness').then(value => {
+                if (value !== null) {
+                    $("#brightness").slider("value", value * 100); // Assuming brightness is 0.0-1.0
+                    $("#brightness-amount").val("" + (value * 100));
+                }
+            });
+
+            getConfigKey('camera_autoexposure').then(value => {
+                if (value !== null) {
+                    // 3 is auto, 0 is manual. those are the only values that it could be
+                    const isAuto = (value === 0.0);
+                    $("#autoexposure").prop("checked", isAuto);
+                }
+            });
+        }
+
+        async function updateConfigKey(key, value) {
+            try {
+                const response = await fetch('/api/config', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    // Computed property name [key] fixes the issue
+                    body: JSON.stringify({ [key]: value })
+                });
+                if (!response.ok) {
+                    console.error('Failed to update config key:', key);
+                }
+            } catch (error) {
+                console.error('Error updating config key:', error);
+            }
+        }
+
+
+        async function queueCameraSettingsRefresh() {
+            try {
+                const response = await fetch('/queuecamerasettingsrefresh');
+                if (!response.ok) {
+                    console.error('Failed to queue camera settings refresh.');
+                }
+            } catch (error) {
+                console.error('Error queuing camera settings refresh:', error);
+            }
+        }
+
+        function updateConfigFromSliders() {
+            const exposureValue = $("#exposure").slider("value");
+            const brightnessValue = $("#brightness").slider("value");
+            const autoexposureValue = $("#autoexposure").is(":checked") ? 3.0 : 0.0; // 3.0 for auto, 0.0 for manual
+
+            updateConfigKey('camera_exposure', exposureValue);
+            updateConfigKey('camera_brightness', brightnessValue);
+            updateConfigKey('camera_autoexposure', autoexposureValue);
+
+            // Queue camera settings refresh
+            queueCameraSettingsRefresh();
+        }
+
+        startStream();
+        populateSliders();
+
+        // update the table every second
+        setInterval(async () => {
+            const poses = await fetchPoses();
+            updateDetectionsTable(poses);
+        }, 1000);
+    </script>
+</body>
+
+</html>

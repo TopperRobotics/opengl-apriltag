@@ -1,0 +1,71 @@
+#version 430 core
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(r8ui) uniform readonly uimage2D u_binaryImg;
+layout(r32ui) uniform readonly uimage2D u_labelImg;
+
+struct CompInfo {
+    uint count;
+    uint offset;
+    int bboxMinX;
+    int bboxMinY;
+    int bboxMaxX;
+    int bboxMaxY;
+    float centroidX;
+    float centroidY;
+};
+
+layout(std430, binding = 1) buffer CompInfoBuffer {
+    uint activeCount;
+    CompInfo compInfo[];
+};
+
+layout(std430, binding = 2) buffer BorderPoints {
+    uint borderPts[];
+};
+
+uniform ivec2 u_imageSize;
+uniform uint u_maxLabels;
+
+bool isBorderPixel(ivec2 pix) {
+    uint b = imageLoad(u_binaryImg, pix).r;
+    if (b != 0u) return false;
+
+    const ivec2 offsets[4] = ivec2[4](
+        ivec2(-1, 0), ivec2(1, 0), ivec2(0, -1), ivec2(0, 1)
+    );
+
+    for (int i = 0; i < 4; ++i) {
+        ivec2 nb = pix + offsets[i];
+        if (nb.x < 0 || nb.y < 0 || nb.x >= u_imageSize.x || nb.y >= u_imageSize.y) return true;
+        uint nbVal = imageLoad(u_binaryImg, nb).r;
+        if (nbVal != 0u) return true;
+    }
+    return false;
+}
+
+void main() {
+    ivec2 pix = ivec2(gl_GlobalInvocationID.xy);
+    if (pix.x >= u_imageSize.x || pix.y >= u_imageSize.y) return;
+
+    uint label = imageLoad(u_labelImg, pix).r;
+    if (label == 0u || label >= u_maxLabels) return;
+
+    CompInfo info = compInfo[label];
+    atomicMin(compInfo[label].bboxMinX, pix.x);
+    atomicMax(compInfo[label].bboxMaxX, pix.x);
+    atomicMin(compInfo[label].bboxMinY, pix.y);
+    atomicMax(compInfo[label].bboxMaxY, pix.y);
+
+    uint areaIdx = atomicAdd(compInfo[label].count, 1u);
+    atomicAdd(compInfo[label].centroidX, float(pix.x));
+    atomicAdd(compInfo[label].centroidY, float(pix.y));
+
+    if (isBorderPixel(pix)) {
+        uint packed = uint(pix.x) | (uint(pix.y) << 16);
+        uint borderIdx = atomicAdd(activeCount, 1u);
+        if (borderIdx < uint(borderPts.length())) {
+            borderPts[borderIdx] = packed;
+        }
+    }
+}

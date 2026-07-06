@@ -1,0 +1,56 @@
+#version 430 core
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(r32ui) uniform readonly uimage2D u_labelImg;
+layout(std430, binding = 0) buffer UFBuffer {
+    uint uf[];
+};
+
+uniform ivec2 u_imageSize;
+
+uint find_root(uint i) {
+    uint p = uf[i];
+    while (p != uf[p]) {
+        p = uf[p];
+    }
+    return p;
+}
+
+void link(uint a, uint b) {
+    uint ra = find_root(a);
+    uint rb = find_root(b);
+    while (ra != rb) {
+        if (ra < rb) {
+            uint old = atomicCompSwap(uf[rb], rb, ra);
+            if (old == rb) break;
+            rb = find_root(b);
+            ra = find_root(a);
+        } else {
+            uint old = atomicCompSwap(uf[ra], ra, rb);
+            if (old == ra) break;
+            ra = find_root(a);
+            rb = find_root(b);
+        }
+    }
+}
+
+void main() {
+    ivec2 pix = ivec2(gl_GlobalInvocationID.xy);
+    if (pix.x >= u_imageSize.x || pix.y >= u_imageSize.y) return;
+
+    uint label = imageLoad(u_labelImg, pix).r;
+    if (label == 0u) return;
+
+    const ivec2 offsets[4] = ivec2[4](
+        ivec2(-1, 0), ivec2(1, 0), ivec2(0, -1), ivec2(0, 1)
+    );
+
+    for (int i = 0; i < 4; ++i) {
+        ivec2 nb = pix + offsets[i];
+        if (nb.x < 0 || nb.y < 0 || nb.x >= u_imageSize.x || nb.y >= u_imageSize.y) continue;
+        uint nlabel = imageLoad(u_labelImg, nb).r;
+        if (nlabel != 0u) {
+            link(label, nlabel);
+        }
+    }
+}
