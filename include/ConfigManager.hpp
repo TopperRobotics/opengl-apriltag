@@ -10,7 +10,7 @@ struct sqlite3;
 class ConfigManager {
 public:
     static const char* const DEFAULTS[];
-    static constexpr size_t NUM_DEFAULTS = 14*2;
+    static constexpr size_t NUM_DEFAULTS = 10*2;
 
     ConfigManager();
     ~ConfigManager();

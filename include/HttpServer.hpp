@@ -8,10 +8,11 @@
 
 #include "DetectionResult.hpp"
 #include "ConfigManager.hpp"
+#include "CameraCalibration.hpp"
 
 class HttpServer {
 public:
-    HttpServer(int port, SharedResults& results, ConfigManager& config);
+    HttpServer(int port, SharedResults& results, ConfigManager& config, CameraCalibration& calibration);
     ~HttpServer();
 
     HttpServer(const HttpServer&) = delete;
@@ -35,6 +36,7 @@ private:
     int port_;
     SharedResults& results_;
     ConfigManager& config_;
+    CameraCalibration& calibration_;
     std::atomic<bool> running_{false};
     std::thread serverThread_;
     struct ServerImpl;

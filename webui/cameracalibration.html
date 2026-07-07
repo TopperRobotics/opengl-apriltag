@@ -31,7 +31,13 @@
             <div class="content-right twelve columns">
                 <div id="content">
                     <img src="" id="mjpegStream" width="640" height="480">
-                    <button onclick="takeSnapshot()">Take Snapshot</button><p id="snapshotAmount">0</p><p>/10 Snapshots Taken</p>
+                    <br>
+                    <button onclick="takeSnapshot()">Take Snapshot</button><button onclick="clearSnapshots()">Clear
+                        Snapshots</button>
+                    <br>
+                    <p id="snapshotAmount">0</p>
+                    <p>/10 Snapshots Taken</p>
+                    <br>
                     <button onclick="startCalibration()">Start Calibration</button>
                 </div>
                 <div id="sidebar" class="widget-area">
@@ -76,63 +82,88 @@
                     </aside>
 
                     <aside class="widget">
-                        <button id="updateConfigButton" onclick="updateConfigFromSliders()">Update Config</button>
+                        <button id="updateConfigButton" onclick="updateBoardParameters()">Update Parameters</button>
+                    </aside>
+
+                    <aside class="widget">
+                        <button id="getCalibrationBoardButton" onclick="getCalibrationBoard()">Get Calibration
+                            Board</button>
                     </aside>
                 </div>
             </div>
         </div>
     </div>
+    <div id="calibrationFinishedDialog" title="">
+        <p>Calibration has finished. Relaunch the application for changes to take affect.</p>
+    </div>
+    <div id="calibrationFailedDialog" title="">
+        <p>Calibration has failed.</p>
+    </div>
     <script>
+        var snapshotCount = 0;
+
         $(function () {
-            $("#exposure").slider({
+            $("#squaresX").slider({
                 range: "min",
-                value: 25,
-                min: -100,
-                max: 100,
+                value: 8,
+                min: 4,
+                max: 12,
                 slide: function (event, ui) {
-                    $("#exposure-amount").val("" + ui.value);
+                    $("#squaresX-amount").val("" + ui.value);
                 }
             });
-            $("#exposure-amount").val("" + $("#exposure").slider("value"));
+            $("#squaresX-amount").val("" + $("#squaresX").slider("value"));
         });
 
         $(function () {
-            $("#brightness").slider({
+            $("#squaresY").slider({
                 range: "min",
-                value: 50,
-                min: -64,
-                max: 64,
+                value: 6,
+                min: 4,
+                max: 12,
                 slide: function (event, ui) {
-                    $("#brightness-amount").val("" + ui.value);
+                    $("#squaresY-amount").val("" + ui.value);
                 }
             });
-            $("#brightness-amount").val("" + $("#brightness").slider("value"));
+            $("#squaresY-amount").val("" + $("#squaresY").slider("value"));
         });
 
         $(function () {
-            $("#brightness").slider({
+            $("#squareLength").slider({
                 range: "min",
-                value: 50,
-                min: -64,
-                max: 64,
+                value: 30,
+                min: 10,
+                max: 40,
                 slide: function (event, ui) {
-                    $("#brightness-amount").val("" + ui.value);
+                    $("#squareLength-amount").val("" + ui.value);
                 }
             });
-            $("#brightness-amount").val("" + $("#brightness").slider("value"));
+            $("#squareLength-amount").val("" + $("#squareLength").slider("value"));
         });
 
         $(function () {
-            $("#brightness").slider({
+            $("#markerLength").slider({
                 range: "min",
-                value: 50,
-                min: -64,
-                max: 64,
+                value: 22,
+                min: 10,
+                max: 40,
                 slide: function (event, ui) {
-                    $("#brightness-amount").val("" + ui.value);
+                    $("#markerLength-amount").val("" + ui.value);
                 }
             });
-            $("#brightness-amount").val("" + $("#brightness").slider("value"));
+            $("#markerLength-amount").val("" + $("#markerLength").slider("value"));
+        });
+
+        $(function () {
+            $("#calibrationFinishedDialog").dialog({
+                autoOpen: false
+            });
+        });
+
+        $(function () {
+            $("#calibrationFailedDialog").dialog({
+                autoOpen: false
+            });
         });
 
         async function fetchStreamPort() {
@@ -161,17 +192,130 @@
             }
         }
 
-        function updateConfigFromSliders() {
-            const exposureValue = $("#exposure").slider("value");
-            const brightnessValue = $("#brightness").slider("value");
-            const autoexposureValue = $("#autoexposure").is(":checked") ? 3.0 : 0.0; // 3.0 for auto, 0.0 for manual
+        function updateBoardParameters() {
+            const squaresX = $("#squaresX").slider("value");
+            const squaresY = $("#squaresY").slider("value");
+            const squareLength = $("#squareLength").slider("value");
+            const markerLength = $("#markerLength").slider("value");
 
-            updateConfigKey('camera_exposure', exposureValue);
-            updateConfigKey('camera_brightness', brightnessValue);
-            updateConfigKey('camera_autoexposure', autoexposureValue);
+            updateBoardParameterKey("squaresX", squaresX);
+            updateBoardParameterKey("squaresY", squaresY);
+            updateBoardParameterKey("squareLength", squareLength * 1000); // mm to m
+            updateBoardParameterKey("markerLength", markerLength * 1000);
+        }
 
-            // Queue camera settings refresh
-            queueCameraSettingsRefresh();
+        async function updateBoardParameterKey(key, value) {
+            try {
+                const response = await fetch('/setcalibrationparameters', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    // Computed property name [key] fixes the issue
+                    body: JSON.stringify({ [key]: value })
+                });
+                if (!response.ok) {
+                    console.error('Failed to update config key:', key);
+                }
+            } catch (error) {
+                console.error('Error updating config key:', error);
+            }
+        }
+
+        async function takeSnapshot() {
+            try {
+                const response = await fetch('/takecamerasnapshot', {
+                    method: 'GET'
+                });
+                if (!response.ok) {
+                    console.log("Error taking snapshot");
+                } else {
+                    snapshotCount++;
+                    document.getElementById('snapshotAmount').textContent = snapshotCount;
+                }
+            } catch (error) {
+                console.log("Error taking snapshot: ", error);
+            }
+        }
+
+        async function startCalibration() {
+            if (snapshotCount >= 10) {
+                try {
+                    const response = await fetch('/calibratecamera', {
+                        method: 'GET'
+                    });
+                    if (response.ok) {
+                        $("#calibrationFinishedDialog").dialog("open");
+                        updateConfigKey("camera_calibration", "camera_calibration.xml");
+                    } else {
+                        $("#calibrationFailedDialog").dialog("open");
+                    }
+                } catch (error) {
+                    console.log("Error calibrating: ", error);
+                }
+            } else {
+                alert("take 10 snapshots")
+            }
+        }
+
+        async function clearSnapshots() {
+            try {
+                const response = await fetch('/clearsnapshots', {
+                    method: 'GET'
+                });
+                if (!response.ok) {
+                    console.log("Error clearing snapshots");
+                }
+                snapshotCount = 0;
+            } catch (error) {
+                console.log("Error clearing snapshots: ", error);
+            }
+        }
+
+        async function getCalibrationBoard() {
+            try {
+                // 1. Fetch the image data
+                const response = await fetch("/generatecharuco");
+
+                // 2. Convert the response stream into a Blob (Binary Large Object)
+                const blob = await response.blob();
+
+                // 3. Create a temporary local URL pointing to the object blob
+                const objectUrl = URL.createObjectURL(blob);
+
+                // 4. Create a hidden virtual anchor element
+                const link = document.createElement('a');
+                link.href = objectUrl;
+                link.download = "charuco.png"; // Defines the fallback file name
+
+                // 5. Append to DOM, click it programmatically, then clean up
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+
+                // Free up the memory by revoking the object URL
+                URL.revokeObjectURL(objectUrl);
+            } catch (error) {
+                console.error('Failed to download image:', error);
+            }
+        }
+
+        async function updateConfigKey(key, value) {
+            try {
+                const response = await fetch('/api/config', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    // Computed property name [key] fixes the issue
+                    body: JSON.stringify({ [key]: value })
+                });
+                if (!response.ok) {
+                    console.error('Failed to update config key:', key);
+                }
+            } catch (error) {
+                console.error('Error updating config key:', error);
+            }
         }
 
         startStream();

@@ -5,6 +5,7 @@
 #include "mjpeg_streamer.hpp"
 #include <chrono>
 #include <sstream>
+#include "CameraCalibration.hpp"
 
 using json = nlohmann::json;
 
@@ -77,8 +78,8 @@ json mat3ToJson(const cv::Mat& R) {
 
 } // anonymous namespace
 
-HttpServer::HttpServer(int port, SharedResults& results, ConfigManager& config)
-    : port_(port), results_(results), config_(config), impl_(std::make_unique<ServerImpl>()) {}
+HttpServer::HttpServer(int port, SharedResults& results, ConfigManager& config, CameraCalibration& calibration)
+    : port_(port), results_(results), config_(config), calibration_(calibration), impl_(std::make_unique<ServerImpl>()) {}
 
 HttpServer::~HttpServer() {
     stop();
@@ -139,6 +140,7 @@ void HttpServer::start() {
     svr.Get("/", [this](const httplib::Request&, httplib::Response& res) {
         // return an HTML page loaded from the webuiDir_
         std::string indexPath = webuiDir + "/index.html";
+        std::cout << webuiDir << std::endl;
         std::ifstream file(indexPath);
         if (!file.is_open()) {
             res.status = 404;
@@ -189,7 +191,62 @@ void HttpServer::start() {
         res.status = 200;
     });
 
-    
+    svr.Get("/clearsnapshots", [this](const httplib::Request&, httplib::Response& res) {
+        this->calibration_.clearCalibrationImagePath();
+        res.status = 200;
+    });
+
+    svr.Get("/calibratecamera", [this](const httplib::Request&, httplib::Response& res) {
+        if(this->calibration_.calibrateCamera()){
+            res.status = 200;
+        } else {
+            res.status = 500;
+        }
+    });
+
+    svr.Get("/generatecharuco", [this](const httplib::Request&, httplib::Response& res) {
+        cv::Mat charuco = this->calibration_.generateCharucoBoard();
+        std::vector<uchar> buf;
+        std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, 100};
+        
+        if (!cv::imencode(".jpg", charuco, buf, params)) {
+            res.status = 500;
+        } else {
+            std::string body(reinterpret_cast<const char*>(buf.data()), buf.size());
+            res.set_content(body, "image/jpeg");
+            res.status = 200;
+        }
+    });
+
+    auto cameraCalibrationParametersHandler = [this](const httplib::Request& req, httplib::Response& res) {
+        try {
+            json body = json::parse(req.body);
+            for (auto it = body.begin(); it != body.end(); ++it) {
+                if(it.key() == "squaresX"){
+                    this->calibration_.setBoardParametersSX(std::stoi(it.value().dump()));
+                }
+                if(it.key() == "squaresY"){
+                    this->calibration_.setBoardParametersSY(std::stoi(it.value().dump()));
+                }
+                if(it.key() == "squareLength"){
+                    this->calibration_.setBoardParametersSL(std::stof(it.value().dump()));
+                }
+                if(it.key() == "markerLength"){
+                    this->calibration_.setBoardParametersML(std::stof(it.value().dump()));
+                }
+            }
+            json ok;
+            ok["status"] = "updated";
+            res.set_content(ok.dump(), "application/json");
+        } catch (const std::exception& e) {
+            res.status = 400;
+            json err;
+            err["error"] = e.what();
+            res.set_content(err.dump(), "application/json");
+        }
+    };
+
+    svr.Post("/setcalibrationparameters", cameraCalibrationParametersHandler);
 
     // handler for other files in the webuiDir
     svr.set_mount_point("/", webuiDir.c_str());

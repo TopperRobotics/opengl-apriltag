@@ -1,3 +1,6 @@
 {
-    "cmake.sourceDirectory": "/wsl.localhost/Ubuntu/home/bentley/opengl-apriltag2"
+    "cmake.sourceDirectory": "/wsl.localhost/Ubuntu/home/bentley/opengl-apriltag2",
+    "files.associations": {
+        "chrono": "cpp"
+    }
 }

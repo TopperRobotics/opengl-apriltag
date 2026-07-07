@@ -6,11 +6,7 @@
 #include <map>
 
 const char* const ConfigManager::DEFAULTS[] = {
-    "camera_fx",             "800",
-    "camera_fy",             "800",
-    "camera_cx",             "640",
-    "camera_cy",             "360",
-    "dist_coeffs",           "[0.1,-0.2,0,0,0]",
+    "camera_calibration",    "camera_calibration.xml",
     "tag_size_m",            "0.16",
     "adaptive_threshold_win","31",
     "adaptive_threshold_const","7",

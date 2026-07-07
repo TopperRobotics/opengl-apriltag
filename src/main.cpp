@@ -6,12 +6,13 @@
 #include <string>
 #include <sstream>
 #include <algorithm>
+#include <filesystem>
 
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
 #include <opencv2/opencv.hpp>
 #include "mjpeg_streamer.hpp"
-
+#include "CameraCalibration.hpp"
 #include "ConfigManager.hpp"
 #include "GpuDetector.hpp"
 #include "CpuPostProcessor.hpp"
@@ -31,27 +32,48 @@ double timestampNow() {
     return std::chrono::duration<double>(clock::now().time_since_epoch()).count();
 }
 
-cv::Mat buildCameraMatrix(const ConfigManager& cfg) {
-    cv::Mat K = cv::Mat::eye(3, 3, CV_64F);
-    K.at<double>(0, 0) = cfg.getDouble("camera_fx", 800.0);
-    K.at<double>(1, 1) = cfg.getDouble("camera_fy", 800.0);
-    K.at<double>(0, 2) = cfg.getDouble("camera_cx", 640.0);
-    K.at<double>(1, 2) = cfg.getDouble("camera_cy", 360.0);
-    return K;
+cv::Mat buildCameraMatrix(const ConfigManager& cfg, std::string calibrationPath) {
+    if(std::filesystem::exists(calibrationPath + "/" + cfg.getString("camera_calibration", "camera_calibration.xml"))){
+        std::cout << "Using calibrated camera matrix" << std::endl;
+        cv::FileStorage fs(calibrationPath + "/" + cfg.getString("camera_calibration", "camera_calibration.xml"), cv::FileStorage::READ);
+        cv::Mat cameraMatrix;
+        fs["camera_matrix"] >> cameraMatrix;
+        fs.release();
+        return cameraMatrix;
+    } else {
+        std::cout << "Using default camera matrix" << std::endl;
+        cv::Mat K = cv::Mat::eye(3, 3, CV_64F);
+        K.at<double>(0, 0) = cfg.getDouble("camera_fx", 800.0);
+        K.at<double>(1, 1) = cfg.getDouble("camera_fy", 800.0);
+        K.at<double>(0, 2) = cfg.getDouble("camera_cx", 640.0);
+        K.at<double>(1, 2) = cfg.getDouble("camera_cy", 360.0);
+        return K;
+    }
 }
 
-cv::Mat buildDistCoeffs(const ConfigManager& cfg) {
-    std::string raw = cfg.getString("dist_coeffs", "[0,0,0,0,0]");
-    raw.erase(std::remove(raw.begin(), raw.end(), '['), raw.end());
-    raw.erase(std::remove(raw.begin(), raw.end(), ']'), raw.end());
-    std::stringstream ss(raw);
-    cv::Mat dist(1, 5, CV_64F);
-    for (int i = 0; i < 5; ++i) {
-        std::string token;
-        if (!std::getline(ss, token, ',')) token = "0";
-        dist.at<double>(0, i) = std::stod(token);
+cv::Mat buildDistCoeffs(const ConfigManager& cfg, std::string calibrationPath) {
+    std::cout << calibrationPath + "/" + cfg.getString("camera_calibration", "camera_calibration.xml") << std::endl;
+    if(std::filesystem::exists(calibrationPath + "/" + cfg.getString("camera_calibration", "camera_calibration.xml"))){
+        std::cout << "Using calibrated distortion coefficients" << std::endl;
+        cv::FileStorage fs(calibrationPath + "/" + cfg.getString("camera_calibration", "camera_calibration.xml"), cv::FileStorage::READ);
+        cv::Mat distCoeffs;
+        fs["distortion_coefficients"] >> distCoeffs;
+        fs.release();
+        return distCoeffs;
+    } else {
+        std::cout << "Using default distortion coefficients" << std::endl;
+        std::string raw = cfg.getString("dist_coeffs", "[0,0,0,0,0]");
+        raw.erase(std::remove(raw.begin(), raw.end(), '['), raw.end());
+        raw.erase(std::remove(raw.begin(), raw.end(), ']'), raw.end());
+        std::stringstream ss(raw);
+        cv::Mat dist(1, 5, CV_64F);
+        for (int i = 0; i < 5; ++i) {
+            std::string token;
+            if (!std::getline(ss, token, ',')) token = "0";
+            dist.at<double>(0, i) = std::stod(token);
+        }
+        return dist;
     }
-    return dist;
 }
 
 struct Options {
@@ -62,6 +84,7 @@ struct Options {
     int cameraStreamPort = 8081;
     std::string webuiDir = "webui";
     std::string cameraSnapshotDir = "snapshot";
+    std::string calibrationDir = "calibration";
 };
 
 Options parseArgs(int argc, char** argv) {
@@ -77,17 +100,17 @@ Options parseArgs(int argc, char** argv) {
         } else if (arg == "--port" && i + 1 < argc) {
             opts.httpPort = std::stoi(argv[++i]);
         } else if (arg == "--help") {
-            std::cout << "Usage: apriltag [--camera N] [--db path] [--shaders dir] [--port N] [--webui dir] [--snapshot dir]\n";
+            std::cout << "Usage: apriltag [--camera N] [--db path] [--shaders dir] [--port N] [--webui dir] [--snapshot dir] [--calibration dir]\n";
             std::exit(0);
         } else if (arg == "--webui" && i + 1 < argc) {
             opts.webuiDir = argv[++i];
         } else if (arg == "--camera-stream-port" && i + 1 < argc) {
             opts.cameraStreamPort = std::stoi(argv[++i]);
-        }  else if (arg == "--snapshot" && i + 1 < argc) {
-            opts.webuiDir = argv[++i];
+        } else if (arg == "--snapshot" && i + 1 < argc) {
+            opts.cameraSnapshotDir = argv[++i];
+        } else if (arg == "--calibration" && i + 1 < argc) {
+            opts.calibrationDir = argv[++i];
         }
-        
-
     }
     return opts;
 }
@@ -162,15 +185,19 @@ int main(int argc, char** argv) {
     ppCfg.decimateFactor = config.getInt("decimate_factor", 2);
     postProcessor.setConfig(ppCfg);
 
-    cv::Mat cameraMatrix = buildCameraMatrix(config);
-    cv::Mat distCoeffs = buildDistCoeffs(config);
+    cv::Mat cameraMatrix = buildCameraMatrix(config, opts.calibrationDir);
+    cv::Mat distCoeffs = buildDistCoeffs(config, opts.calibrationDir);
     const double tagSizeM = ppCfg.tagSizeM;
     const int decimateFactor = std::max(1, ppCfg.decimateFactor);
 
     std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, 90}; // todo: make configurable, add an option to sqlite db
 
+    CameraCalibration calibration;
+    calibration.setCalibrationImagePath(opts.cameraSnapshotDir);
+    calibration.setCalibrationOutputPath(opts.calibrationDir);
+
     SharedResults sharedResults;
-    HttpServer httpServer(opts.httpPort, sharedResults, config);
+    HttpServer httpServer(opts.httpPort, sharedResults, config, calibration);
     httpServer.setWebuiDir(opts.webuiDir);
     httpServer.setCameraStreamPort(opts.cameraStreamPort);
     httpServer.start();
@@ -266,8 +293,8 @@ int main(int argc, char** argv) {
         }
 
         if(httpServer.isCameraSnapshotQueued()){
-            std::cout << "Saving snapshot to " << opts.cameraSnapshotDir + "/image" + result.timestamp + ".jpg" << std::endl;
-            cv::imwrite(opts.cameraSnapshotDir + "/image" + result.timestamp + ".jpg");
+            std::cout << "Saving snapshot to " << opts.cameraSnapshotDir + "/image" + std::to_string(result.timestamp) + ".jpg" << std::endl;
+            cv::imwrite(opts.cameraSnapshotDir + "/image" + std::to_string(result.timestamp) + ".jpg", frame);
             httpServer.clearCameraSnapshotQueue();
         }
 

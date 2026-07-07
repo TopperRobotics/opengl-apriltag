@@ -50,6 +50,7 @@ set(MAIN_SRC
     src/ConfigManager.cpp
     src/HttpServer.cpp
     src/DetectionResult.cpp
+    src/CameraCalibration.cpp
 )
 
 add_executable(apriltag ${MAIN_SRC})
