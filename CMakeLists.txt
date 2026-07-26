@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 project(apriltag_opengl LANGUAGES C CXX)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
@@ -55,6 +55,20 @@ set(MAIN_SRC
 
 add_executable(apriltag ${MAIN_SRC})
 
+# ntcore and wpiutil
+message(STATUS "Target architecture is ${CMAKE_SYSTEM_PROCESSOR}")
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+    message(STATUS "Target architecture is x86_64, using x86_64 wpilib libraries")
+    target_link_directories(apriltag PRIVATE external/lib/ntcore/x86-64)
+    target_link_directories(apriltag PRIVATE external/lib/wpiutil/x86-64)
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
+    message(STATUS "Target architecture is ARM64, using ARM64 wpilib libraries")
+    target_link_directories(apriltag PRIVATE external/lib/ntcore/arm64)
+    target_link_directories(apriltag PRIVATE external/lib/wpiutil/arm64)
+else()
+    message(FATAL_ERROR "Target architecture is ${CMAKE_SYSTEM_PROCESSOR}, no wpilib libraries available")
+endif()
+
 target_include_directories(apriltag PRIVATE
     include
     external/libapriltags/include
@@ -63,6 +77,8 @@ target_include_directories(apriltag PRIVATE
     ${OPENGL_INCLUDE_DIR}
     external/sqlite
     external/include
+    external/ntcore
+    external/wpiutil
 )
 
 target_link_libraries(apriltag PRIVATE
@@ -73,6 +89,8 @@ target_link_libraries(apriltag PRIVATE
     sqlite3
     pthread
     ${OpenCV_LIBS}
+    ntcore
+    wpiutil
 )
 
 target_compile_options(apriltag PRIVATE -Wall -Wextra -O2)

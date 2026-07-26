@@ -163,8 +163,11 @@ void HttpServer::start() {
     svr.Get("/stream", [](const httplib::Request&, httplib::Response& res) {
         if (!mjpegStreamer.isRunning()) {
             mjpegStreamer.start(cameraStreamPort);
+            res.set_content("MJPEG stream started", "text/plain");
+        } else {
+            res.set_content("MJPEG stream already running", "text/plain");
         }
-        res.set_content("MJPEG stream started", "text/plain");
+        res.status = 200;
     });
 
     svr.Get("/stopstream", [](const httplib::Request&, httplib::Response& res) {
@@ -172,12 +175,14 @@ void HttpServer::start() {
             mjpegStreamer.stop();
         }
         res.set_content("MJPEG stream stopped", "text/plain");
+        res.status = 200;
     });
 
     svr.Get("/streamport", [](const httplib::Request&, httplib::Response& res) {
         json body;
         body["port"] = cameraStreamPort;
         res.set_content(body.dump(), "application/json");
+        res.status = 200;
     });
 
     svr.Get("/queuecamerasettingsrefresh", [](const httplib::Request&, httplib::Response& res) {

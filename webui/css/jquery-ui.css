@@ -879,7 +879,7 @@ body .ui-tooltip {
 }
 .ui-widget-content {
 	border: 1px solid #404040;
-	background: #121212 url("images/ui-bg_gloss-wave_16_121212_500x100.png") 50% top repeat-x;
+	background: #121212 url("../img/ui-bg_gloss-wave_16_121212_500x100.png") 50% top repeat-x;
 	color: #eeeeee;
 }
 .ui-widget-content a {
@@ -887,7 +887,7 @@ body .ui-tooltip {
 }
 .ui-widget-header {
 	border: 1px solid #404040;
-	background: #888888 url("images/ui-bg_highlight-hard_15_888888_1x100.png") 50% 50% repeat-x;
+	background: #888888 url("../img/ui-bg_highlight-hard_15_888888_1x100.png") 50% 50% repeat-x;
 	color: #ffffff;
 	font-weight: bold;
 }
@@ -907,7 +907,7 @@ works properly when clicked or hovered */
 html .ui-button.ui-state-disabled:hover,
 html .ui-button.ui-state-disabled:active {
 	border: 1px solid #cccccc;
-	background: #adadad url("images/ui-bg_highlight-soft_35_adadad_1x100.png") 50% 50% repeat-x;
+	background: #adadad url("../img/ui-bg_highlight-soft_35_adadad_1x100.png") 50% 50% repeat-x;
 	font-weight: normal;
 	color: #333333;
 }
@@ -930,7 +930,7 @@ a:visited.ui-button,
 .ui-button:hover,
 .ui-button:focus {
 	border: 1px solid #dddddd;
-	background: #dddddd url("images/ui-bg_highlight-soft_60_dddddd_1x100.png") 50% 50% repeat-x;
+	background: #dddddd url("../img/ui-bg_highlight-soft_60_dddddd_1x100.png") 50% 50% repeat-x;
 	font-weight: normal;
 	color: #000000;
 }
@@ -958,7 +958,7 @@ a.ui-button:active,
 .ui-button:active,
 .ui-button.ui-state-active:hover {
 	border: 1px solid #000000;
-	background: #121212 url("images/ui-bg_inset-soft_15_121212_1x100.png") 50% 50% repeat-x;
+	background: #121212 url("../img/ui-bg_inset-soft_15_121212_1x100.png") 50% 50% repeat-x;
 	font-weight: normal;
 	color: #ffffff;
 }
@@ -980,7 +980,7 @@ a.ui-button:active,
 .ui-widget-content .ui-state-highlight,
 .ui-widget-header .ui-state-highlight {
 	border: 1px solid #404040;
-	background: #555555 url("images/ui-bg_highlight-hard_55_555555_1x100.png") 50% top repeat-x;
+	background: #555555 url("../img/ui-bg_highlight-hard_55_555555_1x100.png") 50% top repeat-x;
 	color: #cccccc;
 }
 .ui-state-checked {
@@ -996,7 +996,7 @@ a.ui-button:active,
 .ui-widget-content .ui-state-error,
 .ui-widget-header .ui-state-error {
 	border: 1px solid #cd0a0a;
-	background: #fef1ec url("images/ui-bg_glass_95_fef1ec_1x400.png") 50% 50% repeat-x;
+	background: #fef1ec url("../img/ui-bg_glass_95_fef1ec_1x400.png") 50% 50% repeat-x;
 	color: #cd0a0a;
 }
 .ui-state-error a,
@@ -1037,31 +1037,31 @@ a.ui-button:active,
 }
 .ui-icon,
 .ui-widget-content .ui-icon {
-	background-image: url("images/ui-icons_777777_256x240.png");
+	background-image: url("../img/ui-icons_777777_256x240.png");
 }
 .ui-widget-header .ui-icon {
-	background-image: url("images/ui-icons_cccccc_256x240.png");
+	background-image: url("../img/ui-icons_cccccc_256x240.png");
 }
 .ui-state-hover .ui-icon,
 .ui-state-focus .ui-icon,
 .ui-button:hover .ui-icon,
 .ui-button:focus .ui-icon {
-	background-image: url("images/ui-icons_c98000_256x240.png");
+	background-image: url("../img/ui-icons_c98000_256x240.png");
 }
 .ui-state-active .ui-icon,
 .ui-button:active .ui-icon {
-	background-image: url("images/ui-icons_f29a00_256x240.png");
+	background-image: url("../img/ui-icons_f29a00_256x240.png");
 }
 .ui-state-highlight .ui-icon,
 .ui-button .ui-state-highlight.ui-icon {
-	background-image: url("images/ui-icons_aaaaaa_256x240.png");
+	background-image: url("../img/ui-icons_aaaaaa_256x240.png");
 }
 .ui-state-error .ui-icon,
 .ui-state-error-text .ui-icon {
-	background-image: url("images/ui-icons_cd0a0a_256x240.png");
+	background-image: url("../img/ui-icons_cd0a0a_256x240.png");
 }
 .ui-button .ui-icon {
-	background-image: url("images/ui-icons_666666_256x240.png");
+	background-image: url("../img/ui-icons_666666_256x240.png");
 }
 
 /* positioning */
