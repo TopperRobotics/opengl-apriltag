@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Settings</title>
+    <script src="js/jquery.js"></script>
+    <script src="js/jquery-ui.js"></script>
+    <script src="js/chart.umd.min.js"></script>
+    <link href="css/jquery-ui.css" rel="stylesheet">
+    <link href="css/base.css" rel="stylesheet">
+</head>
+
+<body
+    class="api jquery-ui wp-singular post-template-default single single-post postid-136 single-format-standard wp-theme-jquery wp-child-theme-apijqueryuicom single-author singular">
+    <header>
+        <section id="global-nav">
+            <nav>
+                <div class="constrain">
+                    <ul>
+                        <li class="project"><a href="/">Home</a></li>
+                        <li class="project"><a href="settings.html">Settings</a></li>
+                        <li class="project"><a href="cameracalibration.html">Camera Calibration</a></li>
+                        <li class="project"><a>NetworkTables Status: <span id="ntStatus">Disconnected</span></a></li>
+                    </ul>
+                </div>
+            </nav>
+        </section>
+    </header>
+    <div id="container" class="constrain">
+        <div id="content-wrapper" class="clearfix row">
+            <div class="content-right twelve columns">
+                <div id="content">
+                    <!-- cpu usage chart -->
+                    <label for="cpuChart">CPU Usage:</label>
+                    <canvas id="cpuChart" width="400" height="200"></canvas>
+                    <!-- memory usage chart -->
+                    <label for="memoryChart">Memory Usage:</label>
+                    <canvas id="memoryChart" width="400" height="200"></canvas>
+                </div>
+                <div id="sidebar" class="widget-area">
+                    <aside class="widget">
+                        <p>
+                            <label for="ntclientenable">Enable NetworkTables Client:</label>
+                            <input type="checkbox" id="ntclientenable">
+                        </p>
+                    </aside>
+
+                    <aside class="widget">
+                        <p>
+                            <label for="ntserveraddress-input">Server IP Address (10.TE.AM.2):</label>
+                            <input type="text" id="ntserveraddress-input"
+                                style="border:0; color:#f6931f; font-weight:bold;">
+                        </p>
+                    </aside>
+
+                    <aside class="widget">
+                        <p>
+                            <label for="ntserverport-input">Server Port (if unsure, use 5810):</label>
+                            <input type="text" id="ntserverport-input"
+                                style="border:0; color:#f6931f; font-weight:bold;">
+                        </p>
+                    </aside>
+
+                    <aside class="widget">
+                        <p>
+                            <label for="clientname-input">Client Name:</label>
+                            <input type="text" id="clientname-input"
+                                style="border:0; color:#f6931f; font-weight:bold;">
+                        </p>
+                    </aside>
+
+                    <aside class="widget">
+                        <button id="updateConfigButton" onclick="updateConfig()">Update Config</button>
+                    </aside>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script>
+        const cpuChartCtx = document.getElementById('cpuChart').getContext('2d');
+        const memoryChartCtx = document.getElementById('memoryChart').getContext('2d');
+
+        const cpuChart = new Chart(cpuChartCtx, {
+            type: 'line',
+            data: {
+                labels: Array.from({ length: 20 }, (_, i) => i + 1),
+                datasets: [{
+                    label: 'CPU Usage (%)',
+                    data: [],
+                    borderColor: 'rgba(75, 192, 192, 1)',
+                    borderWidth: 1,
+                    fill: false
+                }]
+            },
+            options: {
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        max: 100
+                    }
+                }
+            }
+        });
+
+        const memoryChart = new Chart(memoryChartCtx, {
+            type: 'line',
+            data: {
+                labels: Array.from({ length: 20 }, (_, i) => i + 1),
+                datasets: [{
+                    label: 'Memory Usage (%)',
+                    data: [],
+                    borderColor: 'rgba(255, 99, 132, 1)',
+                    borderWidth: 1,
+                    fill: false
+                }]
+            },
+            options: {
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        max: 100
+                    }
+                }
+            }
+        });
+
+        async function getConfigKey(key) {
+            try {
+                const response = await fetch('/getconfig');
+                const data = await response.json();
+                console.log(data);
+                return data[key];
+            } catch (error) {
+                console.error('Error fetching config:', error);
+                return null;
+            }
+        }
+
+        async function updateConfigKey(key, value) {
+            try {
+                const response = await fetch('/api/config', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    // Computed property name [key] fixes the issue
+                    body: JSON.stringify({ [key]: value })
+                });
+                if (!response.ok) {
+                    console.error('Failed to update config key:', key);
+                }
+            } catch (error) {
+                console.error('Error updating config key:', error);
+            }
+        }
+
+        async function restartNTClientToRefreshConfig(){
+            try {
+                const response = await fetch('/restartntclient', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                if (!response.ok) {
+                    console.error('Failed to restart NetworkTables client');
+                }
+            } catch (error) {
+                console.error('Error restarting NetworkTables client:', error);
+            }
+        }
+
+        function updateConfig() {
+            const ntServerAddress = $("#ntserveraddress-input").val();
+            const ntServerPort = parseInt($("#ntserverport-input").val());
+            const clientName = $("#clientname-input").val();
+            const ntClientEnabled = $("#ntclientenable").is(":checked") ? true : false;
+
+            updateConfigKey('NetworkTablesServerIP', ntServerAddress);
+            updateConfigKey('NetworkTablesServerPort', ntServerPort);
+            updateConfigKey('NetworkTablesClientName', clientName);
+            updateConfigKey('NetworkTablesEnabled', ntClientEnabled);
+            restartNTClientToRefreshConfig();
+        }
+
+        function populateConfig() {
+            getConfigKey('NetworkTablesServerIP').then(value => {
+                if (value !== null) {
+                    $("#ntserveraddress-input").val(value);
+                }
+            });
+
+            getConfigKey('NetworkTablesServerPort').then(value => {
+                if (value !== null) {
+                    $("#ntserverport-input").val(value);
+                }
+            });
+
+            getConfigKey('NetworkTablesClientName').then(value => {
+                if (value !== null) {
+                    $("#clientname-input").val(value);
+                }
+            });
+
+            getConfigKey('NetworkTablesEnabled').then(value => {
+                if (value !== null) {
+                    $("#ntclientenable").prop("checked", value);
+                }
+            });
+        }
+
+        async function fetchCPUUsage() {
+            try {
+                const response = await fetch('/cpuusage');
+                const data = await response.json();
+                const cpuUsage = data.cpu_usage_percent;
+                return cpuUsage;
+            } catch (error) {
+                console.error('Error fetching CPU usage:', error);
+            }
+        }
+
+        async function fetchMemoryUsage() {
+            try {
+                const response = await fetch('/memoryusage');
+                const data = await response.json();
+                const memoryUsage = data.used_memory_percent;
+                return memoryUsage;
+            } catch (error) {
+                console.error('Error fetching memory usage:', error);
+            }
+        }
+
+        async function updateNetworkTablesStatus() {
+            try {
+                const response = await fetch('/ntstatus');
+                const data = await response.json();
+                const statusElement = document.getElementById('ntStatus');
+                if (data.state == "connected") {
+                    statusElement.textContent = 'Connected';
+                    statusElement.style.color = 'green';
+                } else if (data.state == "connecting") {
+                    statusElement.textContent = 'Connecting';
+                    statusElement.style.color = 'orange';
+                } else {
+                    statusElement.textContent = 'Disconnected';
+                    statusElement.style.color = 'red';
+                }
+            } catch (error) {
+                console.error('Error fetching NetworkTables status:', error);
+            }
+        }
+
+        function updateCPUUsageChart(chart) {
+            fetchCPUUsage().then(cpuUsage => {
+                if (cpuUsage !== undefined) {
+                    chart.data.datasets[0].data.push(cpuUsage);
+                    if (chart.data.datasets[0].data.length > 20) {
+                        chart.data.datasets[0].data.shift();
+                    }
+                    chart.update();
+                }
+            });
+        }
+
+        function updateMemoryUsageChart(chart) {
+            fetchMemoryUsage().then(memoryUsage => {
+                if (memoryUsage !== undefined) {
+                    chart.data.datasets[0].data.push(memoryUsage);
+                    if (chart.data.datasets[0].data.length > 20) {
+                        chart.data.datasets[0].data.shift();
+                    }
+                    chart.update();
+                }
+            });
+        }
+
+        function updateCharts() {
+            updateCPUUsageChart(cpuChart);
+            updateMemoryUsageChart(memoryChart);
+        }
+
+        populateConfig();
+
+        // update the NetworkTables status every 5 seconds
+        setInterval(async () => {
+            await updateNetworkTablesStatus();
+        }, 5000);
+
+        setInterval(async () => {
+            updateCharts();
+        }, 2000);
+    </script>
+</body>
+
+</html>

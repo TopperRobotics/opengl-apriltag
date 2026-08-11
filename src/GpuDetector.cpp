@@ -288,7 +288,7 @@ int GpuDetector::dispatch(const cv::Mat& grayImage) {
 
     // Pass 1: adaptive threshold
     glUseProgram(impl->thresholdProg);
-    std::cout << "here here here here!!!!" << std::endl;
+    //std::cout << "here here here here!!!!" << std::endl;
     glBindImageTexture(0, impl->inputTex, 0, GL_FALSE, 0, GL_READ_ONLY, GL_R8);
     glBindImageTexture(1, impl->binaryImg, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_R8UI);
     glUniform1f(glGetUniformLocation(impl->thresholdProg, "u_thresholdConst"), config_.thresholdConst);
@@ -339,11 +339,11 @@ int GpuDetector::dispatch(const cv::Mat& grayImage) {
     std::vector<uint32_t> labels(static_cast<size_t>(w * h));
     glBindTexture(GL_TEXTURE_2D, impl->labelImgB);
     glGetTexImage(GL_TEXTURE_2D, 0, GL_RED_INTEGER, GL_UNSIGNED_INT, labels.data());
-    std::cout << "Label image read back, first 10 labels: ";
-    for (int i = 0; i < std::min(10, static_cast<int>(labels.size())); ++i) {
-        std::cout << labels[i] << " ";
-    }
-    std::cout << std::endl;
+    //std::cout << "Label image read back, first 10 labels: ";
+    //for (int i = 0; i < std::min(10, static_cast<int>(labels.size())); ++i) {
+    //    std::cout << labels[i] << " ";
+    //}
+    //std::cout << std::endl;
 
     // Build binary-ish image from threshold output for border detection
     cv::Mat binary(h, w, CV_8UC1);

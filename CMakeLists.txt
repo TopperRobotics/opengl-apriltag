@@ -51,19 +51,23 @@ set(MAIN_SRC
     src/HttpServer.cpp
     src/DetectionResult.cpp
     src/CameraCalibration.cpp
+    src/NetworkTables.cpp
 )
 
 add_executable(apriltag ${MAIN_SRC})
 
 # ntcore and wpiutil
+target_link_options(apriltag PRIVATE "LINKER:--no-as-needed")
 message(STATUS "Target architecture is ${CMAKE_SYSTEM_PROCESSOR}")
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
     message(STATUS "Target architecture is x86_64, using x86_64 wpilib libraries")
     target_link_directories(apriltag PRIVATE external/lib/ntcore/x86-64)
     target_link_directories(apriltag PRIVATE external/lib/wpiutil/x86-64)
+    target_link_directories(apriltag PRIVATE external/lib/wpinet/x86-64)
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
     message(STATUS "Target architecture is ARM64, using ARM64 wpilib libraries")
     target_link_directories(apriltag PRIVATE external/lib/ntcore/arm64)
+    target_link_directories(apriltag PRIVATE external/lib/wpinet/arm64)
     target_link_directories(apriltag PRIVATE external/lib/wpiutil/arm64)
 else()
     message(FATAL_ERROR "Target architecture is ${CMAKE_SYSTEM_PROCESSOR}, no wpilib libraries available")
@@ -78,6 +82,7 @@ target_include_directories(apriltag PRIVATE
     external/sqlite
     external/include
     external/ntcore
+    external/wpinet
     external/wpiutil
 )
 
@@ -90,6 +95,7 @@ target_link_libraries(apriltag PRIVATE
     pthread
     ${OpenCV_LIBS}
     ntcore
+    wpinet
     wpiutil
 )
 

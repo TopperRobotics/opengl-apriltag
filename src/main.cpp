@@ -18,6 +18,7 @@
 #include "CpuPostProcessor.hpp"
 #include "HttpServer.hpp"
 #include "DetectionResult.hpp"
+#include "NetworkTables.hpp"
 
 namespace {
 
@@ -133,6 +134,8 @@ int main(int argc, char** argv) {
     std::signal(SIGINT, handleSignal);
     std::signal(SIGTERM, handleSignal);
 
+    std::cout << cv::getBuildInformation() << "\n";
+
     Options opts = parseArgs(argc, argv);
 
     ConfigManager config;
@@ -190,14 +193,17 @@ int main(int argc, char** argv) {
     const double tagSizeM = ppCfg.tagSizeM;
     const int decimateFactor = std::max(1, ppCfg.decimateFactor);
 
-    std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, 90}; // todo: make configurable, add an option to sqlite db
+    std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, 90};
 
     CameraCalibration calibration;
     calibration.setCalibrationImagePath(opts.cameraSnapshotDir);
     calibration.setCalibrationOutputPath(opts.calibrationDir);
 
+    NetworkTablesClient ntClient;
+    ntClient.start(ntClient.configFromManager(config));
+
     SharedResults sharedResults;
-    HttpServer httpServer(opts.httpPort, sharedResults, config, calibration);
+    HttpServer httpServer(opts.httpPort, sharedResults, config, calibration, ntClient);
     httpServer.setWebuiDir(opts.webuiDir);
     httpServer.setCameraStreamPort(opts.cameraStreamPort);
     httpServer.start();
@@ -205,100 +211,116 @@ int main(int argc, char** argv) {
 
     cv::VideoCapture capture(opts.cameraIndex);
 
-    capture.set(cv::CAP_PROP_FOURCC, cv::VideoWriter::fourcc('M', 'J', 'P', 'G'));
-    capture.set(cv::CAP_PROP_EXPOSURE, config.getDouble("camera_exposure", -6.0));
-    capture.set(cv::CAP_PROP_BRIGHTNESS, config.getDouble("camera_brightness", 0.5)); // might be 0.0-1.0 or 0-255 depending on camera
-    capture.set(cv::CAP_PROP_AUTO_EXPOSURE , config.getDouble("camera_autoexposure", 0.75)); // i have no idea what this could be
     if (!capture.isOpened()) {
-        std::cerr << "Failed to open camera index " << opts.cameraIndex << "\n";
-        httpServer.stop();
-        glfwDestroyWindow(window);
-        glfwTerminate();
-        return 1;
-    }
+        std::cout << "Failed to open camera index " << opts.cameraIndex << "\n";
 
-    cv::Mat frame, gray, decimated;
-    while (g_running) {
-        if (!capture.read(frame) || frame.empty()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-            continue;
-        }
-        cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
+        // Generate a proper placeholder frame (640x480, 3 channels, black)
+        cv::Mat frame(480, 640, CV_8UC3, cv::Scalar(0, 0, 0));
+        cv::putText(frame, "Camera not found.", cv::Point(50, 240),
+                    cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(0, 255, 0), 2);
+        cv::putText(frame, "Connect camera and reboot.", cv::Point(50, 300),
+                    cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(0, 255, 0), 2);
 
-        cv::Mat detectGray = gray;
-        if (decimateFactor > 1) {
-            cv::Mat tmp = gray;
-            for (int i = 1; i < decimateFactor; ++i) {
-                cv::pyrDown(tmp, decimated);
-                tmp = decimated;
+        while (g_running) {
+            if (httpServer.isStreaming()) {
+                std::vector<uchar> buff_bgr;
+                cv::imencode(".jpg", frame, buff_bgr, params);
+                httpServer.streamFrame("/", std::string(buff_bgr.begin(), buff_bgr.end()));
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
-            detectGray = decimated;
+            glfwPollEvents();
         }
+    } else {
+        capture.set(cv::CAP_PROP_FOURCC, cv::VideoWriter::fourcc('M', 'J', 'P', 'G'));
+        capture.set(cv::CAP_PROP_EXPOSURE, config.getDouble("camera_exposure", -6.0));
+        capture.set(cv::CAP_PROP_BRIGHTNESS, config.getDouble("camera_brightness", 0.5)); // might be 0.0-1.0 or 0-255 depending on camera
+        capture.set(cv::CAP_PROP_AUTO_EXPOSURE , config.getDouble("camera_autoexposure", 0.75)); // i have no idea what this could be
+        // todo: add camera autodetection
 
-        gpuDetector.dispatch(detectGray);
-
-        auto tagDets = postProcessor.detect(detectGray, decimateFactor);
-
-        DetectionFrame result;
-        result.timestamp = timestampNow();
-        result.detections.reserve(tagDets.size());
-
-        for (const auto& det : tagDets) {
-            if (!det.good) continue;
-            TagDetectionData out;
-            if (CpuPostProcessor::estimatePose(det, tagSizeM, cameraMatrix, distCoeffs, out)) {
-                if (decimateFactor > 1) {
-                    float scale = static_cast<float>(decimateFactor);
-                    for (auto& c : out.corners) {
-                        c.x *= scale;
-                        c.y *= scale;
-                    }
-                    out.center.x *= scale;
-                    out.center.y *= scale;
-                }
-                result.detections.push_back(std::move(out));
-            } else {
-                TagDetectionData basic = CpuPostProcessor::toTagDetectionData(det);
-                if (decimateFactor > 1) {
-                    float scale = static_cast<float>(decimateFactor);
-                    for (auto& c : basic.corners) {
-                        c.x *= scale;
-                        c.y *= scale;
-                    }
-                    basic.center.x *= scale;
-                    basic.center.y *= scale;
-                }
-                result.detections.push_back(std::move(basic));
+        cv::Mat frame, gray, decimated;
+        while (g_running) {
+            if (!capture.read(frame) || frame.empty()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                continue;
             }
-        }
-        //std::cout <<" Frame timestamp: " << result.timestamp << ", detections: " << result.detections.size() << "\n";
-        sharedResults.update(std::move(result));
+            cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
 
-        if(httpServer.isStreaming()) {
-            std::vector<uchar> buff_bgr;
-            cv::imencode(".jpg", frame, buff_bgr, params);
-            httpServer.streamFrame("/", std::string(buff_bgr.begin(), buff_bgr.end()));
-        }
+            cv::Mat detectGray = gray;
+            if (decimateFactor > 1) {
+                cv::Mat tmp = gray;
+                for (int i = 1; i < decimateFactor; ++i) {
+                    cv::pyrDown(tmp, decimated);
+                    tmp = decimated;
+                }
+                detectGray = decimated;
+            }
 
-        if(httpServer.isCameraSettingsRefreshQueued()) {
-            // get new settings from config and apply to camera
-            std::cout << "Refreshing camera settings from config...\n";
-            std::cout << "New exposure: " << config.getDouble("camera_exposure", -6.0) << "\n";
-            std::cout << "New brightness: " << config.getDouble("camera_brightness", 0.5) << "\n";
-            std::cout << "New autoexposure value: " << config.getDouble("camera_autoexposure", 0.75) << "\n";
-            capture.set(cv::CAP_PROP_EXPOSURE, config.getDouble("camera_exposure", -6.0));
-            capture.set(cv::CAP_PROP_BRIGHTNESS, config.getDouble("camera_brightness", 0.5));
-            capture.set(cv::CAP_PROP_AUTO_EXPOSURE , config.getDouble("camera_autoexposure", 0.75)); // i have no idea what this could be
-            httpServer.clearCameraSettingsRefreshQueue();
-        }
+            gpuDetector.dispatch(detectGray);
 
-        if(httpServer.isCameraSnapshotQueued()){
-            std::cout << "Saving snapshot to " << opts.cameraSnapshotDir + "/image" + std::to_string(result.timestamp) + ".jpg" << std::endl;
-            cv::imwrite(opts.cameraSnapshotDir + "/image" + std::to_string(result.timestamp) + ".jpg", frame);
-            httpServer.clearCameraSnapshotQueue();
-        }
+            auto tagDets = postProcessor.detect(detectGray, decimateFactor);
 
-        glfwPollEvents();
+            DetectionFrame result;
+            result.timestamp = timestampNow();
+            result.detections.reserve(tagDets.size());
+
+            for (const auto& det : tagDets) {
+                if (!det.good) continue;
+                TagDetectionData out;
+                if (CpuPostProcessor::estimatePose(det, tagSizeM, cameraMatrix, distCoeffs, out)) {
+                    if (decimateFactor > 1) {
+                        float scale = static_cast<float>(decimateFactor);
+                        for (auto& c : out.corners) {
+                            c.x *= scale;
+                            c.y *= scale;
+                        }
+                        out.center.x *= scale;
+                        out.center.y *= scale;
+                    }
+                    result.detections.push_back(std::move(out));
+                } else {
+                    TagDetectionData basic = CpuPostProcessor::toTagDetectionData(det);
+                    if (decimateFactor > 1) {
+                        float scale = static_cast<float>(decimateFactor);
+                        for (auto& c : basic.corners) {
+                            c.x *= scale;
+                            c.y *= scale;
+                        }
+                        basic.center.x *= scale;
+                        basic.center.y *= scale;
+                    }
+                    result.detections.push_back(std::move(basic));
+                }
+            }
+            //std::cout <<" Frame timestamp: " << result.timestamp << ", detections: " << result.detections.size() << "\n";
+            sharedResults.update(std::move(result));
+            ntClient.publishDetections(std::move(sharedResults.getLatest()));
+
+            if(httpServer.isStreaming()) [[likely]] {
+                std::vector<uchar> buff_bgr;
+                cv::imencode(".jpg", frame, buff_bgr, params);
+                httpServer.streamFrame("/", std::string(buff_bgr.begin(), buff_bgr.end()));
+            }
+
+            if(httpServer.isCameraSettingsRefreshQueued()) [[unlikely]] {
+                // get new settings from config and apply to camera
+                std::cout << "Refreshing camera settings from config...\n";
+                std::cout << "New exposure: " << config.getDouble("camera_exposure", -6.0) << "\n";
+                std::cout << "New brightness: " << config.getDouble("camera_brightness", 0.5) << "\n";
+                std::cout << "New autoexposure value: " << config.getDouble("camera_autoexposure", 0.75) << "\n";
+                capture.set(cv::CAP_PROP_EXPOSURE, config.getDouble("camera_exposure", -6.0));
+                capture.set(cv::CAP_PROP_BRIGHTNESS, config.getDouble("camera_brightness", 0.5));
+                capture.set(cv::CAP_PROP_AUTO_EXPOSURE , config.getDouble("camera_autoexposure", 0.75)); // i have no idea what this could be
+                httpServer.clearCameraSettingsRefreshQueue();
+            }
+
+            if(httpServer.isCameraSnapshotQueued()) [[unlikely]] {
+                std::cout << "Saving snapshot to " << opts.cameraSnapshotDir + "/image" + std::to_string(result.timestamp) + ".jpg" << std::endl;
+                cv::imwrite(opts.cameraSnapshotDir + "/image" + std::to_string(result.timestamp) + ".jpg", frame);
+                httpServer.clearCameraSnapshotQueue();
+            }
+
+            glfwPollEvents();
+        }
     }
 
     httpServer.stop();

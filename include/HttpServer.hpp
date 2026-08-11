@@ -9,10 +9,11 @@
 #include "DetectionResult.hpp"
 #include "ConfigManager.hpp"
 #include "CameraCalibration.hpp"
+#include "NetworkTables.hpp"
 
 class HttpServer {
 public:
-    HttpServer(int port, SharedResults& results, ConfigManager& config, CameraCalibration& calibration);
+    HttpServer(int port, SharedResults& results, ConfigManager& config, CameraCalibration& calibration, NetworkTablesClient& ntClient);
     ~HttpServer();
 
     HttpServer(const HttpServer&) = delete;
@@ -37,6 +38,7 @@ private:
     SharedResults& results_;
     ConfigManager& config_;
     CameraCalibration& calibration_;
+    NetworkTablesClient& ntClient_;
     std::atomic<bool> running_{false};
     std::thread serverThread_;
     struct ServerImpl;

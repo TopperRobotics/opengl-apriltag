@@ -21,6 +21,7 @@
                         <li class="project"><a href="/">Home</a></li>
                         <li class="project"><a href="settings.html">Settings</a></li>
                         <li class="project"><a href="cameracalibration.html">Camera Calibration</a></li>
+                        <li class="project"><a>NetworkTables Status: <span id="ntStatus">Disconnected</span></a></li>
                     </ul>
                 </div>
             </nav>
@@ -270,6 +271,26 @@
             queueCameraSettingsRefresh();
         }
 
+        async function updateNetworkTablesStatus() {
+            try {
+                const response = await fetch('/ntstatus');
+                const data = await response.json();
+                const statusElement = document.getElementById('ntStatus');
+                if (data.state == "connected") {
+                    statusElement.textContent = 'Connected';
+                    statusElement.style.color = 'green';
+                } else if (data.state == "connecting") {
+                    statusElement.textContent = 'Connecting';
+                    statusElement.style.color = 'orange';
+                } else {
+                    statusElement.textContent = 'Disconnected';
+                    statusElement.style.color = 'red';
+                }
+            } catch (error) {
+                console.error('Error fetching NetworkTables status:', error);
+            }
+        }
+
         startStream();
         populateSliders();
 
@@ -278,6 +299,12 @@
             const poses = await fetchPoses();
             updateDetectionsTable(poses);
         }, 1000);
+
+        // update the NetworkTables status every 5 seconds
+        setInterval(async () => {
+            await updateNetworkTablesStatus();
+        }, 5000);
+
     </script>
 </body>
 

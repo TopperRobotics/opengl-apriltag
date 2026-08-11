@@ -6,6 +6,8 @@
 #include <chrono>
 #include <sstream>
 #include "CameraCalibration.hpp"
+#include <stdio.h>
+#include <unistd.h>
 
 using json = nlohmann::json;
 
@@ -78,8 +80,8 @@ json mat3ToJson(const cv::Mat& R) {
 
 } // anonymous namespace
 
-HttpServer::HttpServer(int port, SharedResults& results, ConfigManager& config, CameraCalibration& calibration)
-    : port_(port), results_(results), config_(config), calibration_(calibration), impl_(std::make_unique<ServerImpl>()) {}
+HttpServer::HttpServer(int port, SharedResults& results, ConfigManager& config, CameraCalibration& calibration, NetworkTablesClient& ntClient)
+    : port_(port), results_(results), config_(config), calibration_(calibration), ntClient_(ntClient), impl_(std::make_unique<ServerImpl>()) {}
 
 HttpServer::~HttpServer() {
     stop();
@@ -221,6 +223,105 @@ void HttpServer::start() {
             res.set_content(body, "image/jpeg");
             res.status = 200;
         }
+    });
+
+    svr.Get("/ntstatus", [this](const httplib::Request&, httplib::Response& res) {
+        json body;
+        NetworkTablesClient::Status status = this->ntClient_.getStatus();
+        std::string stateStr;
+        switch (status.state) {
+            case NetworkTablesClient::ConnectionState::Disabled: stateStr = "Disabled"; break;
+            case NetworkTablesClient::ConnectionState::Connecting: stateStr = "Connecting"; break;
+            case NetworkTablesClient::ConnectionState::Connected: stateStr = "Connected"; break;
+            case NetworkTablesClient::ConnectionState::Disconnected: stateStr = "Disconnected"; break;
+            case NetworkTablesClient::ConnectionState::Error: stateStr = "Error"; break;
+        }
+        body["state"] = stateStr;
+        body["message"] = status.message;
+        body["serverAddress"] = status.serverAddress;
+        res.set_content(body.dump(), "application/json");
+    });
+
+    svr.Get("/cpuusage", [](const httplib::Request&, httplib::Response& res) {
+        json body;
+        // Read CPU usage from /proc/stat
+        std::ifstream statFile("/proc/stat");
+        if (!statFile.is_open()) {
+            res.status = 500;
+            body["error"] = "Failed to open /proc/stat";
+            res.set_content(body.dump(), "application/json");
+            return;
+        }
+
+        std::string line;
+        std::getline(statFile, line);
+        std::istringstream iss(line);
+        std::string cpuLabel;
+        long user, nice, system, idle, iowait, irq, softirq, steal;
+        iss >> cpuLabel >> user >> nice >> system >> idle >> iowait >> irq >> softirq >> steal;
+
+        long totalIdle = idle + iowait;
+        long totalNonIdle = user + nice + system + irq + softirq + steal;
+        long total = totalIdle + totalNonIdle;
+
+        static long prevTotal = 0;
+        static long prevIdle = 0;
+
+        long totald = total - prevTotal;
+        long idled = totalIdle - prevIdle;
+
+        double cpuPercentage = (totald - idled) * 100.0 / totald;
+
+        prevTotal = total;
+        prevIdle = totalIdle;
+
+        body["cpu_usage_percent"] = cpuPercentage;
+        res.set_content(body.dump(), "application/json");
+    });
+
+    svr.Get("/memoryusage", [](const httplib::Request&, httplib::Response& res) {
+        json body;
+        // Read memory usage from /proc/meminfo
+        std::ifstream memFile("/proc/meminfo");
+        if (!memFile.is_open()) {
+            res.status = 500;
+            body["error"] = "Failed to open /proc/meminfo";
+            res.set_content(body.dump(), "application/json");
+            return;
+        }
+
+        std::string line;
+        long memTotal = 0, memFree = 0, buffers = 0, cached = 0;
+
+        while (std::getline(memFile, line)) {
+            std::istringstream iss(line);
+            std::string key;
+            long value;
+            std::string unit;
+            iss >> key >> value >> unit;
+
+            if (key == "MemTotal:") memTotal = value;
+            else if (key == "MemFree:") memFree = value;
+            else if (key == "Buffers:") buffers = value;
+            else if (key == "Cached:") cached = value;
+
+            if (memTotal && memFree && buffers && cached) break; // Stop if all values are found
+        }
+
+        long usedMemory = memTotal - memFree - buffers - cached;
+        double usedMemoryPercent = static_cast<double>(usedMemory) / memTotal * 100.0;
+
+        body["total_memory_kb"] = memTotal;
+        body["used_memory_kb"] = usedMemory;
+        body["used_memory_percent"] = usedMemoryPercent;
+
+        res.set_content(body.dump(), "application/json");
+    });
+
+    svr.Get("/restartntclient", [this](const httplib::Request&, httplib::Response& res) {
+        this->ntClient_.stop();
+        this->ntClient_.start(this->ntClient_.configFromManager(this->config_));
+        res.status = 200;
     });
 
     auto cameraCalibrationParametersHandler = [this](const httplib::Request& req, httplib::Response& res) {
