@@ -11,6 +11,7 @@
 #include <array>
 #include <unordered_map>
 #include <limits>
+#include <cmath>
 
 namespace {
 
@@ -102,7 +103,6 @@ struct GpuDetector::Impl {
         if (ufParentBuf) glDeleteBuffers(1, &ufParentBuf);
         ufParentBuf = 0;
 
-        GLuint progs[] = {thresholdProg, cclInitProg, cclMergeProg, cclFinalProg};
         glDeleteProgram(thresholdProg);
         glDeleteProgram(cclInitProg);
         glDeleteProgram(cclMergeProg);
@@ -153,11 +153,10 @@ struct GpuDetector::Impl {
         glBufferData(GL_SHADER_STORAGE_BUFFER, ufCount * sizeof(uint32_t), nullptr, GL_DYNAMIC_DRAW);
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 
-        boundaryHost.resize(static_cast<size_t>(w) * static_cast<size_t>(h));
         compHost.clear();
     }
 
-    void extractComponentsCPU(const cv::Mat& gray, const std::vector<uint32_t>& labels) {
+    void extractComponentsCPU(const std::vector<uint32_t>& labels) {
         struct Accum {
             int count = 0;
             int minX = std::numeric_limits<int>::max();
@@ -166,30 +165,19 @@ struct GpuDetector::Impl {
             int maxY = std::numeric_limits<int>::min();
             double sumX = 0.0;
             double sumY = 0.0;
-            std::vector<cv::Point2f> border;
         };
 
         std::unordered_map<uint32_t, Accum> accum;
         const int w = width;
         const int h = height;
 
-        auto isBlack = [&](int x, int y) {
-            return gray.at<uint8_t>(y, x) == 0;  // or < 128
-        };
-
-        auto isBorder = [&](int x, int y, uint32_t label) {
-            if (!isBlack(x, y)) return false;
-            const int dx[4] = {-1, 1, 0, 0};
-            const int dy[4] = {0, 0, -1, 1};
-            for (int i = 0; i < 4; ++i) {
-                int nx = x + dx[i];
-                int ny = y + dy[i];
-                if (nx < 0 || ny < 0 || nx >= w || ny >= h) return true;
-                if (labels[static_cast<size_t>(ny * w + nx)] != label) return true;
-            }
-            return false;
-        };
-
+        // Only the per-component bounding box/centroid/pixel count is
+        // actually consumed downstream (as candidate regions of interest
+        // for the CPU AprilTags decoder). Per-pixel border-membership
+        // tracking used to be computed here (a 4-neighbor check for every
+        // single foreground pixel) purely to feed a border-point buffer
+        // that nothing reads anymore, so it has been dropped -- this pass
+        // is now a single cheap accumulation loop instead.
         for (int y = 0; y < h; ++y) {
             for (int x = 0; x < w; ++x) {
                 uint32_t label = labels[static_cast<size_t>(y * w + x)];
@@ -202,9 +190,6 @@ struct GpuDetector::Impl {
                 a.maxY = std::max(a.maxY, y);
                 a.sumX += x;
                 a.sumY += y;
-                if (isBorder(x, y, label)) {
-                    a.border.emplace_back(static_cast<float>(x), static_cast<float>(y));
-                }
             }
         }
 
@@ -220,19 +205,14 @@ struct GpuDetector::Impl {
             if (aspect < 0.5f || aspect > 2.0f) continue;
 
             ComponentInfo info{};
-            info.count = static_cast<uint32_t>(a.border.size());
-            info.offset = static_cast<uint32_t>(boundaryHost.size());
+            info.count = static_cast<uint32_t>(a.count);
+            info.offset = 0;
             info.bboxMinX = a.minX;
             info.bboxMinY = a.minY;
             info.bboxMaxX = a.maxX;
             info.bboxMaxY = a.maxY;
             info.centroidX = static_cast<float>(a.sumX / std::max(1, a.count));
             info.centroidY = static_cast<float>(a.sumY / std::max(1, a.count));
-
-            for (const auto& pt : a.border) {
-                uint32_t packed = static_cast<uint32_t>(pt.x) | (static_cast<uint32_t>(pt.y) << 16);
-                boundaryHost.push_back(packed);
-            }
 
             compHost.push_back(info);
             activeComponents++;
@@ -296,12 +276,6 @@ int GpuDetector::dispatch(const cv::Mat& grayImage) {
     glUniform2iv(glGetUniformLocation(impl->thresholdProg, "u_imageSize"), 2, imageSize);
     dispatch2D(w, h);
     glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
-    // write pass 1 to disk for debugging
-    std::vector<uint8_t> binaryData(static_cast<size_t>(w * h));
-    glBindTexture(GL_TEXTURE_2D, impl->binaryImg);
-    glGetTexImage(GL_TEXTURE_2D, 0, GL_RED_INTEGER, GL_UNSIGNED_BYTE, binaryData.data());
-    cv::Mat binaryMat(h, w, CV_8UC1, binaryData.data());
-    cv::imwrite("binary_output.png", binaryMat);
 
     // Reset union-find buffer
     const size_t ufCount = static_cast<size_t>(w) * static_cast<size_t>(h) + 1;
@@ -318,11 +292,25 @@ int GpuDetector::dispatch(const cv::Mat& grayImage) {
     dispatch2D(w, h);
     glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT);
 
-    // Pass 2b: CCL merge (multiple iterations)
+    // Pass 2b: CCL merge (multiple iterations). Each round unions every
+    // pixel's label with its neighbors' *current* roots, and unions are
+    // always performed root-to-root, so (similar to a Shiloach-Vishkin
+    // style parallel connectivity algorithm) the union-find effectively
+    // doubles its "reach" every round rather than growing by a single hop.
+    // The number of rounds needed for full convergence therefore scales
+    // with log2(largest image dimension) rather than being a fixed
+    // constant; a fixed small count (this used to be hardcoded to 5) can
+    // leave large connected components -- e.g. the border of a big/close
+    // tag, or one that spans more pixels after camera resolution increases
+    // -- split across multiple partially-merged labels, which would
+    // fragment a single tag into multiple, smaller candidate regions.
+    const int mergeIterations = std::clamp(
+        static_cast<int>(std::ceil(std::log2(static_cast<double>(std::max(w, h))))) + 4,
+        8, 24);
     glUseProgram(impl->cclMergeProg);
     glBindImageTexture(0, impl->labelImgA, 0, GL_FALSE, 0, GL_READ_ONLY, GL_R32UI);
     glUniform2iv(glGetUniformLocation(impl->cclMergeProg, "u_imageSize"), 2, imageSize);
-    for (int i = 0; i < 5; ++i) {
+    for (int i = 0; i < mergeIterations; ++i) {
         dispatch2D(w, h);
         glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
     }
@@ -345,11 +333,13 @@ int GpuDetector::dispatch(const cv::Mat& grayImage) {
     //}
     //std::cout << std::endl;
 
-    // Build binary-ish image from threshold output for border detection
-    cv::Mat binary(h, w, CV_8UC1);
-    glBindTexture(GL_TEXTURE_2D, impl->binaryImg);
-    glGetTexImage(GL_TEXTURE_2D, 0, GL_RED_INTEGER, GL_UNSIGNED_BYTE, binary.data);
-    impl->extractComponentsCPU(binary, labels);
+    // extractComponentsCPU() only needs the label image (component bounding
+    // boxes/centroids/pixel counts are all derived from `labels`); it used
+    // to also require a synchronous read-back of the binary threshold
+    // texture purely to compute per-pixel border membership, but nothing
+    // consumes those border points anymore, so that second full-image
+    // glGetTexImage() round-trip (a GPU/CPU sync point) has been removed.
+    impl->extractComponentsCPU(labels);
     impl->activeComponents = static_cast<int>(impl->compHost.size());
     return impl->activeComponents;
 }

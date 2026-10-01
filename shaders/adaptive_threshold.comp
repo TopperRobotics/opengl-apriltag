@@ -8,10 +8,17 @@ layout(r8ui) uniform writeonly uimage2D u_outputImage;
 
 uniform float u_thresholdConst;
 uniform ivec2 u_imageSize;
+// NOTE: u_windowSize is intentionally unused for the actual box-sum math
+// below. RADIUS/BLOCK_DIM (and therefore the true window size the shared
+// memory tiles and summation loops operate on) are compile-time constants;
+// there used to be a bug here where the sum was always computed over a
+// fixed 31x31 window but divided by this runtime uniform, silently
+// corrupting the mean (and therefore the threshold) whenever
+// adaptive_threshold_win was configured to anything other than 31.
 uniform int u_windowSize;
 
 const int RADIUS      = 15;
-int WINDOW_SIZE = u_windowSize;//31;            // 2*RADIUS + 1
+const int WINDOW_SIZE = 2 * RADIUS + 1; // 31, must match RADIUS above
 const int TILE_SIZE   = 16;            // local_size
 const int BLOCK_DIM   = TILE_SIZE + 2 * RADIUS;   // 46
 

@@ -247,53 +247,65 @@ int main(int argc, char** argv) {
 
             cv::Mat detectGray = gray;
             if (decimateFactor > 1) {
-                cv::Mat tmp = gray;
-                for (int i = 1; i < decimateFactor; ++i) {
-                    cv::pyrDown(tmp, decimated);
-                    tmp = decimated;
-                }
+                // Resize by an exact 1/decimateFactor instead of chaining
+                // pyrDown() calls. pyrDown() always halves each dimension
+                // per call, so calling it (decimateFactor - 1) times
+                // actually shrinks the image by 2^(decimateFactor-1), which
+                // only happens to equal `decimateFactor` when it's 1 or 2.
+                // For any other configured value (e.g. 3 or 4) the working
+                // image was shrunk by far more than intended, while corner
+                // and center coordinates below are scaled back up by a
+                // plain `* decimateFactor` -- silently producing badly
+                // wrong pixel coordinates (and therefore wrong poses) for
+                // every detection whenever decimate_factor wasn't 1 or 2.
+                cv::resize(gray, decimated, cv::Size(), 1.0 / decimateFactor, 1.0 / decimateFactor,
+                           cv::INTER_AREA);
                 detectGray = decimated;
             }
 
             gpuDetector.dispatch(detectGray);
 
-            auto tagDets = postProcessor.detect(detectGray, decimateFactor);
+            // Turn the GPU's connected-component bounding boxes into
+            // candidate regions of interest so the (much more expensive)
+            // CPU AprilTags decoder only has to search near likely tags
+            // instead of the whole frame.
+            std::vector<cv::Rect> candidateRegions;
+            for (const auto& comp : gpuDetector.getComponentInfo()) {
+                candidateRegions.emplace_back(
+                    comp.bboxMinX, comp.bboxMinY,
+                    comp.bboxMaxX - comp.bboxMinX + 1,
+                    comp.bboxMaxY - comp.bboxMinY + 1);
+            }
+
+            auto tagDets = postProcessor.detect(detectGray, candidateRegions, decimateFactor);
 
             DetectionFrame result;
             result.timestamp = timestampNow();
             result.detections.reserve(tagDets.size());
 
+            // Note: tagDets are already rescaled to full-resolution pixel
+            // coordinates by postProcessor.detect() (see cameraDecimate
+            // above), so no further corner/center scaling is needed here --
+            // and estimatePose()'s solvePnP call below is now operating in
+            // the same coordinate space as cameraMatrix/distCoeffs, which
+            // were built from a full-resolution calibration.
             for (const auto& det : tagDets) {
                 if (!det.good) continue;
                 TagDetectionData out;
                 if (CpuPostProcessor::estimatePose(det, tagSizeM, cameraMatrix, distCoeffs, out)) {
-                    if (decimateFactor > 1) {
-                        float scale = static_cast<float>(decimateFactor);
-                        for (auto& c : out.corners) {
-                            c.x *= scale;
-                            c.y *= scale;
-                        }
-                        out.center.x *= scale;
-                        out.center.y *= scale;
-                    }
                     result.detections.push_back(std::move(out));
                 } else {
-                    TagDetectionData basic = CpuPostProcessor::toTagDetectionData(det);
-                    if (decimateFactor > 1) {
-                        float scale = static_cast<float>(decimateFactor);
-                        for (auto& c : basic.corners) {
-                            c.x *= scale;
-                            c.y *= scale;
-                        }
-                        basic.center.x *= scale;
-                        basic.center.y *= scale;
-                    }
-                    result.detections.push_back(std::move(basic));
+                    result.detections.push_back(CpuPostProcessor::toTagDetectionData(det));
                 }
             }
             //std::cout <<" Frame timestamp: " << result.timestamp << ", detections: " << result.detections.size() << "\n";
+            // Publish the frame we just built directly instead of reading it
+            // back out of sharedResults; that avoided an extra mutex lock and
+            // a full deep copy of the frame (including cv::Mat pose data) on
+            // every single detection cycle, which added needless latency to
+            // the data sent to the roboRIO.
+            ntClient.publishDetections(result);
             sharedResults.update(std::move(result));
-            ntClient.publishDetections(std::move(sharedResults.getLatest()));
 
             if(httpServer.isStreaming()) [[likely]] {
                 std::vector<uchar> buff_bgr;

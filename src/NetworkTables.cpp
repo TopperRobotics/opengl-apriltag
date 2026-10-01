@@ -128,12 +128,21 @@ void NetworkTablesClient::start(const Config& config) {
         impl_->started = false;
     }
 
+    impl_->config = config;
+
     if (!config.enabled) {
-        impl_->config = config;
         return;
     }
 
-    impl_->config = config;
+    if (config.serverIp.empty()) {
+        // Nothing to connect to (e.g. field not yet configured). Leave the
+        // client stopped rather than calling SetServer with an empty
+        // hostname, which would otherwise spin up a background client that
+        // repeatedly fails to resolve/connect. getStatus() reports this as
+        // an Error state so the UI can surface it to the user.
+        return;
+    }
+
     impl_->inst = nt::NetworkTableInstance::GetDefault();
     impl_->inst.SetServer(config.serverIp.c_str(), config.serverPort);
     impl_->inst.StartClient4(config.clientName);
@@ -164,6 +173,9 @@ void NetworkTablesClient::publishDetections(const DetectionFrame& frame) {
     std::lock_guard lock(impl_->mutex);
     if (!impl_->started || !impl_->config.enabled) return;
     impl_->jsonEntry.SetString(toJson(frame));
+    // Flush immediately so the roboRIO sees fresh detections with minimal
+    // latency instead of waiting for NT's default periodic send interval.
+    impl_->inst.Flush();
 }
 
 NetworkTablesClient::Status NetworkTablesClient::getStatus() const {
@@ -176,8 +188,13 @@ NetworkTablesClient::Status NetworkTablesClient::getStatus() const {
     }
 
     if (!impl_->started) {
-        s.state = ConnectionState::Disconnected;
-        s.message = "Not started";
+        if (impl_->config.serverIp.empty()) {
+            s.state = ConnectionState::Error;
+            s.message = "No NetworkTables server IP configured";
+        } else {
+            s.state = ConnectionState::Disconnected;
+            s.message = "Not started";
+        }
         return s;
     }
 

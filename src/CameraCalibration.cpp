@@ -59,13 +59,23 @@ void CameraCalibration::clearCalibrationImagePath(){
                 } else {
                     std::cout << "File could not be deleted" << std::endl;
                 }
-                calibrationImages.push_back(entry.path().string());
             }
         }
     }
+    // The snapshot directory is now empty (or was already); make sure we
+    // don't keep stale paths to files that no longer exist around for a
+    // subsequent calibrateCamera() call to try (and fail) to read.
+    calibrationImages.clear();
 }
 
 void CameraCalibration::enumerateCalibrationImagesFromImagePath() {
+    // Reset first: this is called at the start of every calibrateCamera()
+    // run, and previously never cleared the vector, so every calibration
+    // attempt would re-append the same on-disk snapshots on top of
+    // whatever was already collected, duplicating views (and skewing the
+    // resulting reprojection error/calibration) more and more with each
+    // successive calibration run.
+    calibrationImages.clear();
     if (std::filesystem::exists(calibrationImagePath) && std::filesystem::is_directory(calibrationImagePath)) {
         for (const auto& entry : std::filesystem::directory_iterator(calibrationImagePath)) {
             if (entry.is_regular_file()) {
@@ -179,7 +189,7 @@ bool CameraCalibration::calibrateCamera() {
     cv::FileStorage fs(outputPath, cv::FileStorage::WRITE);
     if (!fs.isOpened()) {
         std::cerr << "Failed to open the file for writing." << std::endl;
-        return -1;
+        return false;
     }
     fs << "image_width" << imageSize.width;
     fs << "image_height" << imageSize.height;

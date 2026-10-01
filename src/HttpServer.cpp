@@ -318,7 +318,7 @@ void HttpServer::start() {
         res.set_content(body.dump(), "application/json");
     });
 
-    svr.Get("/restartntclient", [this](const httplib::Request&, httplib::Response& res) {
+    svr.Post("/restartntclient", [this](const httplib::Request&, httplib::Response& res) {
         this->ntClient_.stop();
         this->ntClient_.start(this->ntClient_.configFromManager(this->config_));
         res.status = 200;
