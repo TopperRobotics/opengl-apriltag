@@ -8,14 +8,13 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # Explicitly use Ubuntu 24.04 so apt-get installs OpenCV 4.9.0
+    runs-on: ubuntu-24.04
 
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
-        # Crucial: This ensures the 'external/' directory pulls down 
-        # sqlite, libapriltags, and wpilib if they are configured as git submodules.
         submodules: recursive 
 
     - name: Install Dependencies
