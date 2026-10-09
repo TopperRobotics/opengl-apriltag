@@ -20,53 +20,78 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y \
-          build-essential \
-          cmake \
-          pkg-config \
-          libgl1-mesa-dev \
-          libglu1-mesa-dev \
-          libeigen3-dev \
-          libglew-dev \
-          libglfw3-dev
+          build-essential cmake pkg-config \
+          libgl1-mesa-dev libglu1-mesa-dev \
+          libeigen3-dev libglew-dev libglfw3-dev
 
-    # 1. Check if we already have a cached build of OpenCV 4.14.0
-    - name: Cache OpenCV 4.14.0
+    # 1. Cache OpenCV 4.14.0
+    - name: Cache OpenCV
       id: cache-opencv
       uses: actions/cache@v4
       with:
         path: ${{ github.workspace }}/opencv-install
         key: ${{ runner.os }}-opencv-4.14.0
 
-    # 2. Build OpenCV 4.14.0 from source ONLY if the cache was not found
-    - name: Build OpenCV 4.14.0
+    # 2. Build OpenCV 4.14.0 from source (if not cached)
+    - name: Build OpenCV
       if: steps.cache-opencv.outputs.cache-hit != 'true'
       run: |
         git clone --branch 4.14.0 --depth 1 https://github.com/opencv/opencv.git
         cmake -B opencv/build -S opencv \
           -DCMAKE_BUILD_TYPE=Release \
           -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/opencv-install \
-          -DBUILD_TESTS=OFF \
-          -DBUILD_PERF_TESTS=OFF \
-          -DBUILD_EXAMPLES=OFF \
-          -DBUILD_opencv_apps=OFF \
+          -DBUILD_TESTS=OFF -DBUILD_PERF_TESTS=OFF \
+          -DBUILD_EXAMPLES=OFF -DBUILD_opencv_apps=OFF \
           -DBUILD_DOCS=OFF
         cmake --build opencv/build --config Release -j $(nproc)
         cmake --install opencv/build
 
-    # 3. Configure your project, explicitly pointing it to the newly built OpenCV
+    # 3. Configure and Build your project
     - name: Configure CMake
       run: |
         cmake -B ${{github.workspace}}/build \
           -DCMAKE_BUILD_TYPE=Release \
           -DOpenCV_DIR=${{ github.workspace }}/opencv-install/lib/cmake/opencv4
-
-    # 4. Build your code
+          
     - name: Build Project
       run: cmake --build ${{github.workspace}}/build --config Release -j $(nproc)
 
-    # 5. Upload the compiled executable
+    # 4. Package all dependencies into a single standalone AppImage
+    - name: Package Standalone AppImage
+      run: |
+        # Setup directories for linuxdeploy
+        mkdir -p AppDir/usr/bin
+        cp ${{github.workspace}}/build/apriltag AppDir/usr/bin/
+        
+        # Create a standard Linux desktop entry
+        cat << 'EOF' > AppDir/apriltag.desktop
+        [Desktop Entry]
+        Name=AprilTag
+        Exec=apriltag
+        Icon=apriltag
+        Type=Application
+        Categories=Utility;
+        EOF
+        
+        # Create a dummy icon (linuxdeploy requires this to build)
+        echo '<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256"></svg>' > AppDir/apriltag.svg
+        
+        # Download linuxdeploy
+        wget https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+        chmod +x linuxdeploy-x86_64.AppImage
+        
+        # Extract linuxdeploy to bypass GitHub Action FUSE permission restrictions
+        ./linuxdeploy-x86_64.AppImage --appimage-extract
+        
+        # Run linuxdeploy to bundle OpenCV, GLFW, GLEW, and WPILib into one file
+        ./squashfs-root/AppRun --appdir AppDir --output appimage
+        
+        # Rename the final executable to something friendly
+        mv AprilTag*.AppImage apriltag-standalone-ubuntu.AppImage
+
+    # 5. Upload the single executable file
     - name: Upload compiled executable
       uses: actions/upload-artifact@v4
       with:
         name: apriltag
-        path: ${{github.workspace}}/build/apriltag
+        path: apriltag.AppImage
