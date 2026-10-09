@@ -11,8 +11,8 @@
 
 #if CV_VERSION_HEX >= 0x040700  // OpenCV 4.7.0 and newer
     #include <opencv2/objdetect/charuco_detector.hpp>
-#else                           // Older OpenCV 4.x and OpenCV 3.x
-    #include <opencv2/aruco/charuco.hpp>
+#else
+    #error OpenCV 4.7.0 required
 #endif
 
 #include <filesystem>
