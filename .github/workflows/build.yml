@@ -1,0 +1,39 @@
+name: Build Code
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        # Crucial: This ensures the 'external/' directory pulls down 
+        # sqlite, libapriltags, and wpilib if they are configured as git submodules.
+        submodules: recursive 
+
+    - name: Install Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          cmake \
+          pkg-config \
+          libgl1-mesa-dev \
+          libglu1-mesa-dev \
+          libeigen3-dev \
+          libopencv-dev \
+          libglew-dev \
+          libglfw3-dev
+
+    - name: Configure CMake
+      run: cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=Release
+
+    - name: Build Project
+      run: cmake --build ${{github.workspace}}/build --config Release -j $(nproc)
