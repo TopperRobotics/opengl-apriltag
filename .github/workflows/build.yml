@@ -59,35 +59,34 @@ jobs:
     # 4. Package all dependencies into a single standalone AppImage
     - name: Package Standalone AppImage
       run: |
-        # Setup directories for linuxdeploy
         mkdir -p AppDir/usr/bin
-        cp ${{github.workspace}}/build/apriltag AppDir/usr/bin/
-        
-        # Create a standard Linux desktop entry
-        cat << 'EOF' > AppDir/apriltag.desktop
-        [Desktop Entry]
-        Name=AprilTag
-        Exec=apriltag
-        Icon=apriltag
-        Type=Application
-        Categories=Utility;
-        EOF
-        
-        # Create a dummy icon (linuxdeploy requires this to build)
-        echo '<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256"></svg>' > AppDir/apriltag.svg
-        
-        # Download linuxdeploy
+        cp ${{ github.workspace }}/build/apriltag AppDir/usr/bin/
+    
+        printf '%s\n' \
+          '[Desktop Entry]' \
+          'Name=AprilTag' \
+          'Exec=apriltag' \
+          'Icon=apriltag' \
+          'Type=Application' \
+          'Categories=Utility;' \
+          > AppDir/apriltag.desktop
+    
+        printf '%s\n' '<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256"></svg>' \
+          > AppDir/apriltag.svg
+    
         wget https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
         chmod +x linuxdeploy-x86_64.AppImage
-        
-        # Extract linuxdeploy to bypass GitHub Action FUSE permission restrictions
         ./linuxdeploy-x86_64.AppImage --appimage-extract
-        
-        # Run linuxdeploy to bundle OpenCV, GLFW, GLEW, and WPILib into one file
         ./squashfs-root/AppRun --appdir AppDir --output appimage
-        
-        # Rename the final executable to something friendly
-        mv AprilTag*.AppImage apriltag-standalone-ubuntu.AppImage
+        mv $(ls *.AppImage | grep -v linuxdeploy) apriltag-standalone-ubuntu.AppImage
+
+    - name: Verify AppImage
+      run: |
+        chmod +x apriltag-standalone-ubuntu.AppImage
+        ./apriltag-standalone-ubuntu.AppImage --appimage-extract
+        ls -l squashfs-root/AppRun
+        cat squashfs-root/apriltag.desktop
+        test -x squashfs-root/usr/bin/apriltag    
 
     # 5. Upload the single executable file
     - name: Upload compiled executable
