@@ -63,3 +63,10 @@ jobs:
     # 4. Build your code
     - name: Build Project
       run: cmake --build ${{github.workspace}}/build --config Release -j $(nproc)
+
+    # 5. Upload the compiled executable
+    - name: Upload compiled executable
+      uses: actions/upload-artifact@v4
+      with:
+        name: apriltag
+        path: ${{github.workspace}}/build/apriltag
