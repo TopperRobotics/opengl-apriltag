@@ -93,5 +93,5 @@ jobs:
     - name: Upload compiled executable
       uses: actions/upload-artifact@v4
       with:
-        name: apriltag
-        path: apriltag.AppImage
+        name: apriltag-standalone-ubuntu
+        path: apriltag-standalone-ubuntu.AppImage
