@@ -4,7 +4,17 @@
 #include <iostream>
 #include <vector>
 #include <opencv2/opencv.hpp>
-#include <opencv2/objdetect/charuco_detector.hpp> // opencv2/aruco/charuco_detector.hpp was moved
+#include <opencv2/core/version.hpp>
+
+// Calculate a unique version identifier (e.g., 40700 for 4.7.0)
+#define CV_VERSION_HEX ((CV_VERSION_MAJOR << 16) | (CV_VERSION_MINOR << 8) | CV_VERSION_REVISION)
+
+#if CV_VERSION_HEX >= 0x040700  // OpenCV 4.7.0 and newer
+    #include <opencv2/objdetect/charuco_detector.hpp>
+#else                           // Older OpenCV 4.x and OpenCV 3.x
+    #include <opencv2/aruco/charuco.hpp>
+#endif
+
 #include <filesystem>
 #include <chrono>
 
