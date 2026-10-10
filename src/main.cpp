@@ -8,8 +8,14 @@
 #include <algorithm>
 #include <filesystem>
 
-#include <GL/glew.h>
-#include <GLFW/glfw3.h>
+// libepoxy provides the GL and EGL entry points. <epoxy/egl.h> transitively
+// includes <EGL/egl.h>, <EGL/eglext.h>, and <epoxy/gl.h>, so no separate
+// GL or EGL headers are needed here. Unlike GLEW there is no init call and
+// no "experimental" mode to enable -- entry points are resolved lazily on
+// first use.
+#include <epoxy/gl.h>
+#include <epoxy/egl.h>
+
 #include <opencv2/opencv.hpp>
 #include "mjpeg_streamer.hpp"
 #include "CameraCalibration.hpp"
@@ -116,17 +122,165 @@ Options parseArgs(int argc, char** argv) {
     return opts;
 }
 
-bool initGLFW() {
-    if (!glfwInit()) {
-        std::cerr << "Failed to initialize GLFW\n";
-        return false;
+// ---------------------------------------------------------------------------
+// Headless EGL-backed OpenGL context.
+//
+// GLFW cannot create a GPU-accelerated *headless* context: without a window
+// system (X11/Wayland) it either fails or silently falls back to a software
+// rasterizer (llvmpipe/swrast). EGL, on the other hand, can create a real
+// GPU-backed OpenGL context with no window system at all -- via the
+// EGL_EXT_platform_device extension (DRM/GBM nodes) or, failing that, via
+// EGL_DEFAULT_DISPLAY (which on some drivers resolves to a headless GPU
+// device too).
+//
+// We create a small pbuffer surface so the driver is happy to make the
+// context current. All rendering in this app is offscreen into FBOs anyway,
+// so the pbuffer is never read from or drawn to.
+//
+// Entry points for both EGL and GL are provided by libepoxy; there is no
+// init step and no experimental mode to enable. Every function declared in
+// <epoxy/gl.h> and <epoxy/egl.h> is callable directly (and lazily resolved
+// the first time it is invoked), which is why this file calls
+// eglGetProcAddress and glGetString by name rather than through a loader.
+// ---------------------------------------------------------------------------
+struct HeadlessGLContext {
+    EGLDisplay display = EGL_NO_DISPLAY;
+    EGLContext context = EGL_NO_CONTEXT;
+    EGLSurface surface = EGL_NO_SURFACE;
+    EGLConfig  config  = nullptr;
+
+    bool init(int width, int height) {
+        display = EGL_NO_DISPLAY;
+
+        // 1) Prefer a real GPU device via EGL_EXT_platform_device. This
+        //    bypasses any window system entirely and gives us a DRM/GBM-backed
+        //    hardware context -- exactly what we want on a headless robot.
+        auto eglQueryDevicesEXT = reinterpret_cast<PFNEGLQUERYDEVICESEXTPROC>(
+            eglGetProcAddress("eglQueryDevicesEXT"));
+        auto eglGetPlatformDisplayEXT = reinterpret_cast<PFNEGLGETPLATFORMDISPLAYEXTPROC>(
+            eglGetProcAddress("eglGetPlatformDisplayEXT"));
+
+        if (eglQueryDevicesEXT && eglGetPlatformDisplayEXT) {
+            constexpr EGLint kMaxDevices = 16;
+            EGLDeviceEXT devices[kMaxDevices];
+            EGLint numDevices = 0;
+            if (eglQueryDevicesEXT(kMaxDevices, devices, &numDevices) == EGL_TRUE && numDevices > 0) {
+                for (EGLint i = 0; i < numDevices; ++i) {
+                    EGLDisplay d = eglGetPlatformDisplayEXT(EGL_PLATFORM_DEVICE_EXT, devices[i], nullptr);
+                    if (d == EGL_NO_DISPLAY) continue;
+                    EGLint major = 0, minor = 0;
+                    if (eglInitialize(d, &major, &minor) == EGL_TRUE) {
+                        display = d;
+                        std::cout << "EGL: initialized device display (EGL "
+                                  << major << "." << minor << ")\n";
+                        break;
+                    }
+                }
+            }
+        }
+
+        // 2) Fall back to the default display if no device platform worked.
+        if (display == EGL_NO_DISPLAY) {
+            display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+            if (display == EGL_NO_DISPLAY) {
+                std::cerr << "EGL: eglGetDisplay(EGL_DEFAULT_DISPLAY) failed\n";
+                return false;
+            }
+            EGLint major = 0, minor = 0;
+            if (eglInitialize(display, &major, &minor) != EGL_TRUE) {
+                std::cerr << "EGL: eglInitialize failed: 0x"
+                          << std::hex << eglGetError() << std::dec << "\n";
+                display = EGL_NO_DISPLAY;
+                return false;
+            }
+            std::cout << "EGL: initialized default display (EGL "
+                      << major << "." << minor << ")\n";
+        }
+
+        if (eglBindAPI(EGL_OPENGL_API) != EGL_TRUE) {
+            std::cerr << "EGL: eglBindAPI(EGL_OPENGL_API) failed: 0x"
+                      << std::hex << eglGetError() << std::dec << "\n";
+            return false;
+        }
+
+        EGLint configAttribs[] = {
+            EGL_SURFACE_TYPE,    EGL_PBUFFER_BIT,
+            EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT,
+            EGL_RED_SIZE,        8,
+            EGL_GREEN_SIZE,      8,
+            EGL_BLUE_SIZE,       8,
+            EGL_ALPHA_SIZE,      8,
+            EGL_DEPTH_SIZE,      24,
+            EGL_NONE
+        };
+        EGLint numConfigs = 0;
+        if (eglChooseConfig(display, configAttribs, &config, 1, &numConfigs) != EGL_TRUE
+            || numConfigs < 1) {
+            std::cerr << "EGL: eglChooseConfig failed: 0x"
+                      << std::hex << eglGetError() << std::dec << "\n";
+            return false;
+        }
+
+        EGLint contextAttribs[] = {
+            EGL_CONTEXT_MAJOR_VERSION, 4,
+            EGL_CONTEXT_MINOR_VERSION, 3,
+            EGL_CONTEXT_OPENGL_PROFILE_MASK, EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT,
+            EGL_NONE
+        };
+        context = eglCreateContext(display, config, EGL_NO_CONTEXT, contextAttribs);
+        if (context == EGL_NO_CONTEXT) {
+            // Some drivers ignore the version/profile hints; try again
+            // without them and let the driver pick the best it can.
+            EGLint fallbackAttribs[] = { EGL_NONE };
+            context = eglCreateContext(display, config, EGL_NO_CONTEXT, fallbackAttribs);
+        }
+        if (context == EGL_NO_CONTEXT) {
+            std::cerr << "EGL: eglCreateContext failed: 0x"
+                      << std::hex << eglGetError() << std::dec << "\n";
+            return false;
+        }
+
+        EGLint pbufferAttribs[] = {
+            EGL_WIDTH,  width,
+            EGL_HEIGHT, height,
+            EGL_NONE
+        };
+        surface = eglCreatePbufferSurface(display, config, pbufferAttribs);
+        if (surface == EGL_NO_SURFACE) {
+            std::cerr << "EGL: eglCreatePbufferSurface failed: 0x"
+                      << std::hex << eglGetError() << std::dec << "\n";
+            return false;
+        }
+
+        if (eglMakeCurrent(display, surface, surface, context) != EGL_TRUE) {
+            std::cerr << "EGL: eglMakeCurrent failed: 0x"
+                      << std::hex << eglGetError() << std::dec << "\n";
+            return false;
+        }
+
+        // Sanity check: confirm we actually got a hardware driver and not
+        // a software rasterizer. If this prints "llvmpipe" or "softpipe",
+        // the EGL device-platform path above failed to find a GPU.
+        const unsigned char* version  = glGetString(GL_VERSION);
+        const unsigned char* renderer = glGetString(GL_RENDERER);
+        //std::cout << "EGL: OpenGL context ready"
+        //          << (version  ? reinterpret_cast<const char*>(version)  : "<null>") << " on "
+        //          << (renderer ? reinterpret_cast<const char*>(renderer) : "<null>") << ")\n";
+        std::printf("EGL: OpenGL context ready, Version: %s, Renderer: %s \n", reinterpret_cast<const char *>(version), reinterpret_cast<const char *>(renderer));
+        return true;
     }
-    glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-    return true;
-}
+
+    void destroy() {
+        if (display == EGL_NO_DISPLAY) return;
+        eglMakeCurrent(display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+        if (surface != EGL_NO_SURFACE) eglDestroySurface(display, surface);
+        if (context != EGL_NO_CONTEXT) eglDestroyContext(display, context);
+        eglTerminate(display);
+        surface = EGL_NO_SURFACE;
+        context = EGL_NO_CONTEXT;
+        display = EGL_NO_DISPLAY;
+    }
+};
 
 } // anonymous namespace
 
@@ -144,24 +298,16 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    if (!initGLFW()) return 1;
-
-    GLFWwindow* window = glfwCreateWindow(640, 480, "apriltag-offscreen", nullptr, nullptr);
-    if (!window) {
-        std::cerr << "Failed to create GLFW window\n";
-        glfwTerminate();
+    // Bring up a GPU-accelerated headless OpenGL context via EGL. No window
+    // system, no GLFW, no software fallback. libepoxy resolves the GL and
+    // EGL entry points we use the first time they are called -- no explicit
+    // init, no "experimental" flag, no need to drain a spurious GL error
+    // that a loader may have left behind.
+    HeadlessGLContext glContext;
+    if (!glContext.init(640, 480)) {
+        std::cerr << "Failed to create headless EGL OpenGL context\n";
         return 1;
     }
-    glfwMakeContextCurrent(window);
-
-    glewExperimental = GL_TRUE;
-    if (glewInit() != GLEW_OK) {
-        std::cerr << "Failed to initialize GLEW\n";
-        glfwDestroyWindow(window);
-        glfwTerminate();
-        return 1;
-    }
-    while (glGetError() != GL_NO_ERROR) {}
 
     GpuDetector::Config gpuCfg;
     gpuCfg.width = 640;
@@ -175,8 +321,7 @@ int main(int argc, char** argv) {
         gpuDetector.compileShaders(opts.shaderDir);
     } catch (const std::exception& e) {
         std::cerr << "Shader error: " << e.what() << "\n";
-        glfwDestroyWindow(window);
-        glfwTerminate();
+        glContext.destroy();
         return 1;
     }
 
@@ -226,20 +371,33 @@ int main(int argc, char** argv) {
                 std::vector<uchar> buff_bgr;
                 cv::imencode(".jpg", frame, buff_bgr, params);
                 httpServer.streamFrame("/", std::string(buff_bgr.begin(), buff_bgr.end()));
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
-            glfwPollEvents();
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
     } else {
         capture.set(cv::CAP_PROP_FOURCC, cv::VideoWriter::fourcc('M', 'J', 'P', 'G'));
         capture.set(cv::CAP_PROP_EXPOSURE, config.getDouble("camera_exposure", -6.0));
         capture.set(cv::CAP_PROP_BRIGHTNESS, config.getDouble("camera_brightness", 0.5)); // might be 0.0-1.0 or 0-255 depending on camera
-        capture.set(cv::CAP_PROP_AUTO_EXPOSURE , config.getDouble("camera_autoexposure", 0.75)); // i have no idea what this could be
+        capture.set(cv::CAP_PROP_AUTO_EXPOSURE, config.getDouble("camera_autoexposure", 0.75)); // i have no idea what this could be
+        capture.set(cv::CAP_PROP_FRAME_WIDTH, 640);
+        capture.set(cv::CAP_PROP_FRAME_HEIGHT, 480);
         // todo: add camera autodetection
 
         cv::Mat frame, gray, decimated;
         while (g_running) {
             if (!capture.read(frame) || frame.empty()) {
+                // Generate a proper placeholder frame (640x480, 3 channels, black)
+                cv::Mat frame(480, 640, CV_8UC3, cv::Scalar(0, 0, 0));
+                cv::putText(frame, "Frame empty.", cv::Point(50, 240),
+                cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(0, 255, 0), 2);
+                cv::putText(frame, "Reconnect camera and reboot", cv::Point(50, 300),
+                cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(0, 255, 0), 2);
+
+                if (httpServer.isStreaming()) {
+                        std::vector<uchar> buff_bgr;
+                        cv::imencode(".jpg", frame, buff_bgr, params);
+                        httpServer.streamFrame("/", std::string(buff_bgr.begin(), buff_bgr.end()));
+                }
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 continue;
             }
@@ -330,14 +488,11 @@ int main(int argc, char** argv) {
                 cv::imwrite(opts.cameraSnapshotDir + "/image" + std::to_string(result.timestamp) + ".jpg", frame);
                 httpServer.clearCameraSnapshotQueue();
             }
-
-            glfwPollEvents();
         }
     }
 
     httpServer.stop();
     capture.release();
-    glfwDestroyWindow(window);
-    glfwTerminate();
+    glContext.destroy();
     return 0;
 }
