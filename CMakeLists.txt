@@ -9,8 +9,10 @@ find_package(OpenGL REQUIRED)
 find_package(Eigen3 REQUIRED NO_MODULE)
 find_package(PkgConfig REQUIRED QUIET)
 find_package(OpenCV REQUIRED)
-find_package(GLEW REQUIRED)
-find_package(glfw3 REQUIRED)
+
+# libepoxy does not ship a CMake config file, so use pkg-config instead.
+# IMPORTED_TARGET gives us PkgConfig::EPOXY with include dirs + libs propagated.
+pkg_check_modules(EPOXY REQUIRED IMPORTED_TARGET epoxy)
 
 include_directories(${OpenCV_INCLUDE_DIRS})
 
@@ -89,8 +91,8 @@ target_include_directories(apriltag PRIVATE
 target_link_libraries(apriltag PRIVATE
     apriltags_lib
     OpenGL::GL
-    GLEW::GLEW
-    glfw
+    OpenGL::EGL
+    PkgConfig::EPOXY      # was: ${EPOXY_LIBRARIES}
     sqlite3
     pthread
     ${OpenCV_LIBS}
