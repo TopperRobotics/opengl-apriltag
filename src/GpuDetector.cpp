@@ -1,6 +1,6 @@
 #include "GpuDetector.hpp"
 
-#include <GL/glew.h>
+#include <epoxy/gl.h>
 #include <string>
 #include <fstream>
 #include <sstream>
