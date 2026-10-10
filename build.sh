@@ -54,8 +54,6 @@ echo "==> Installing system dependencies"
   libepoxy-dev \
   libglu1-mesa-dev \
   libeigen3-dev \
-  libglew-dev \
-  libglfw3-dev
 
 # Match the checkout behavior from actions/checkout with submodules: recursive.
 if [[ -f "$PROJECT_ROOT/.gitmodules" ]]; then
