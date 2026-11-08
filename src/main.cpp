@@ -123,25 +123,109 @@ Options parseArgs(int argc, char** argv) {
 }
 
 // ---------------------------------------------------------------------------
+// CameraManager: Encapsulates camera connection, auto-detection via driver,
+// and settings application.
+// ---------------------------------------------------------------------------
+class CameraManager {
+public:
+    CameraManager() = default;
+    ~CameraManager() { release(); }
+
+    bool initialize(int preferredIndex, const ConfigManager& config) {
+        int cameraIndex = preferredIndex;
+        if (!tryOpen(cameraIndex)) {
+            std::cout << "Preferred camera index " << cameraIndex << " failed. Starting camera autodetection...\n";
+            cameraIndex = detectAvailableCamera();
+            if (cameraIndex < 0 || !tryOpen(cameraIndex)) {
+                std::cerr << "Camera autodetection failed: No functional camera found.\n";
+                return false;
+            }
+        }
+
+        applySettings(config);
+        return true;
+    }
+
+    bool isOpened() const {
+        return capture_.isOpened();
+    }
+
+    bool read(cv::Mat& frame) {
+        return capture_.read(frame);
+    }
+
+    void applySettings(const ConfigManager& config) {
+        if (!capture_.isOpened()) return;
+
+        capture_.set(cv::CAP_PROP_FOURCC, cv::VideoWriter::fourcc('M', 'J', 'P', 'G'));
+        capture_.set(cv::CAP_PROP_FRAME_WIDTH, 640);
+        capture_.set(cv::CAP_PROP_FRAME_HEIGHT, 480);
+
+        // V4L2 Auto Exposure mapping: 3.0 = V4L2_EXPOSURE_AUTO, 1.0 = V4L2_EXPOSURE_MANUAL
+        double autoExposureVal = config.getDouble("camera_autoexposure", 3.0);
+        capture_.set(cv::CAP_PROP_AUTO_EXPOSURE, autoExposureVal);
+
+        capture_.set(cv::CAP_PROP_EXPOSURE, config.getDouble("camera_exposure", -6.0));
+        capture_.set(cv::CAP_PROP_BRIGHTNESS, config.getDouble("camera_brightness", 0.5));
+
+        std::cout << "Camera settings applied. Index: " << activeIndex_
+                  << " | AutoExposure: " << autoExposureVal
+                  << " | Exposure: " << config.getDouble("camera_exposure", -6.0)
+                  << " | Brightness: " << config.getDouble("camera_brightness", 0.5) << "\n";
+    }
+
+    void release() {
+        if (capture_.isOpened()) {
+            capture_.release();
+            activeIndex_ = -1;
+        }
+    }
+
+private:
+    bool tryOpen(int index) {
+        std::cout << "Attempting to open camera at index " << index << "...\n";
+        capture_.open(index, cv::CAP_ANY);
+        if (capture_.isOpened()) {
+            activeIndex_ = index;
+            std::cout << "Successfully opened camera at index " << index << "\n";
+            return true;
+        }
+        return false;
+    }
+
+    int detectAvailableCamera() {
+        // Query Linux driver nodes /dev/video*
+        for (int i = 0; i < 16; ++i) {
+            std::string devPath = "/dev/video" + std::to_string(i);
+            if (std::filesystem::exists(devPath)) {
+                cv::VideoCapture testCap(i);
+                if (testCap.isOpened()) {
+                    std::cout << "Autodetected active camera driver node at " << devPath << " (index " << i << ")\n";
+                    testCap.release();
+                    return i;
+                }
+            }
+        }
+
+        // Fallback: brute-force standard indices 0 to 4
+        for (int i = 0; i < 5; ++i) {
+            cv::VideoCapture testCap(i);
+            if (testCap.isOpened()) {
+                std::cout << "Autodetected working camera at fallback index " << i << "\n";
+                testCap.release();
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    cv::VideoCapture capture_;
+    int activeIndex_ = -1;
+};
+
+// ---------------------------------------------------------------------------
 // Headless EGL-backed OpenGL context.
-//
-// GLFW cannot create a GPU-accelerated *headless* context: without a window
-// system (X11/Wayland) it either fails or silently falls back to a software
-// rasterizer (llvmpipe/swrast). EGL, on the other hand, can create a real
-// GPU-backed OpenGL context with no window system at all -- via the
-// EGL_EXT_platform_device extension (DRM/GBM nodes) or, failing that, via
-// EGL_DEFAULT_DISPLAY (which on some drivers resolves to a headless GPU
-// device too).
-//
-// We create a small pbuffer surface so the driver is happy to make the
-// context current. All rendering in this app is offscreen into FBOs anyway,
-// so the pbuffer is never read from or drawn to.
-//
-// Entry points for both EGL and GL are provided by libepoxy; there is no
-// init step and no experimental mode to enable. Every function declared in
-// <epoxy/gl.h> and <epoxy/egl.h> is callable directly (and lazily resolved
-// the first time it is invoked), which is why this file calls
-// eglGetProcAddress and glGetString by name rather than through a loader.
 // ---------------------------------------------------------------------------
 struct HeadlessGLContext {
     EGLDisplay display = EGL_NO_DISPLAY;
@@ -152,9 +236,6 @@ struct HeadlessGLContext {
     bool init(int width, int height) {
         display = EGL_NO_DISPLAY;
 
-        // 1) Prefer a real GPU device via EGL_EXT_platform_device. This
-        //    bypasses any window system entirely and gives us a DRM/GBM-backed
-        //    hardware context -- exactly what we want on a headless robot.
         auto eglQueryDevicesEXT = reinterpret_cast<PFNEGLQUERYDEVICESEXTPROC>(
             eglGetProcAddress("eglQueryDevicesEXT"));
         auto eglGetPlatformDisplayEXT = reinterpret_cast<PFNEGLGETPLATFORMDISPLAYEXTPROC>(
@@ -179,7 +260,6 @@ struct HeadlessGLContext {
             }
         }
 
-        // 2) Fall back to the default display if no device platform worked.
         if (display == EGL_NO_DISPLAY) {
             display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
             if (display == EGL_NO_DISPLAY) {
@@ -229,8 +309,6 @@ struct HeadlessGLContext {
         };
         context = eglCreateContext(display, config, EGL_NO_CONTEXT, contextAttribs);
         if (context == EGL_NO_CONTEXT) {
-            // Some drivers ignore the version/profile hints; try again
-            // without them and let the driver pick the best it can.
             EGLint fallbackAttribs[] = { EGL_NONE };
             context = eglCreateContext(display, config, EGL_NO_CONTEXT, fallbackAttribs);
         }
@@ -258,15 +336,11 @@ struct HeadlessGLContext {
             return false;
         }
 
-        // Sanity check: confirm we actually got a hardware driver and not
-        // a software rasterizer. If this prints "llvmpipe" or "softpipe",
-        // the EGL device-platform path above failed to find a GPU.
         const unsigned char* version  = glGetString(GL_VERSION);
         const unsigned char* renderer = glGetString(GL_RENDERER);
-        //std::cout << "EGL: OpenGL context ready"
-        //          << (version  ? reinterpret_cast<const char*>(version)  : "<null>") << " on "
-        //          << (renderer ? reinterpret_cast<const char*>(renderer) : "<null>") << ")\n";
-        std::printf("EGL: OpenGL context ready, Version: %s, Renderer: %s \n", reinterpret_cast<const char *>(version), reinterpret_cast<const char *>(renderer));
+        std::printf("EGL: OpenGL context ready, Version: %s, Renderer: %s \n",
+                    version ? reinterpret_cast<const char*>(version) : "<null>",
+                    renderer ? reinterpret_cast<const char*>(renderer) : "<null>");
         return true;
     }
 
@@ -298,11 +372,6 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // Bring up a GPU-accelerated headless OpenGL context via EGL. No window
-    // system, no GLFW, no software fallback. libepoxy resolves the GL and
-    // EGL entry points we use the first time they are called -- no explicit
-    // init, no "experimental" flag, no need to drain a spurious GL error
-    // that a loader may have left behind.
     HeadlessGLContext glContext;
     if (!glContext.init(640, 480)) {
         std::cerr << "Failed to create headless EGL OpenGL context\n";
@@ -330,7 +399,10 @@ int main(int argc, char** argv) {
     ppCfg.tagSizeM = config.getDouble("tag_size_m", 0.16);
     ppCfg.minTagArea = config.getInt("min_tag_area", 100);
     ppCfg.maxTagArea = config.getInt("max_tag_area", 10000);
-    ppCfg.decimateFactor = config.getInt("decimate_factor", 2);
+    ppCfg.decimateFactor = config.getInt("decimate_factor", 3);
+    // todo: expose to webui
+    // implement like camera settings
+    // especially the settings refresh queue
     postProcessor.setConfig(ppCfg);
 
     cv::Mat cameraMatrix = buildCameraMatrix(config, opts.calibrationDir);
@@ -354,49 +426,38 @@ int main(int argc, char** argv) {
     httpServer.start();
     std::cout << "HTTP server listening on port " << opts.httpPort << "\n";
 
-    cv::VideoCapture capture(opts.cameraIndex);
+    CameraManager cameraManager;
+    if (!cameraManager.initialize(opts.cameraIndex, config)) {
+        std::cout << "Failed to initialize camera. Entering fallback placeholder loop...\n";
 
-    if (!capture.isOpened()) {
-        std::cout << "Failed to open camera index " << opts.cameraIndex << "\n";
-
-        // Generate a proper placeholder frame (640x480, 3 channels, black)
-        cv::Mat frame(480, 640, CV_8UC3, cv::Scalar(0, 0, 0));
-        cv::putText(frame, "Camera not found.", cv::Point(50, 240),
+        cv::Mat placeholderFrame(480, 640, CV_8UC3, cv::Scalar(0, 0, 0));
+        cv::putText(placeholderFrame, "Camera not found.", cv::Point(50, 240),
                     cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(0, 255, 0), 2);
-        cv::putText(frame, "Connect camera and reboot.", cv::Point(50, 300),
+        cv::putText(placeholderFrame, "Connect camera and reboot.", cv::Point(50, 300),
                     cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(0, 255, 0), 2);
 
         while (g_running) {
             if (httpServer.isStreaming()) {
                 std::vector<uchar> buff_bgr;
-                cv::imencode(".jpg", frame, buff_bgr, params);
+                cv::imencode(".jpg", placeholderFrame, buff_bgr, params);
                 httpServer.streamFrame("/", std::string(buff_bgr.begin(), buff_bgr.end()));
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
     } else {
-        capture.set(cv::CAP_PROP_FOURCC, cv::VideoWriter::fourcc('M', 'J', 'P', 'G'));
-        capture.set(cv::CAP_PROP_EXPOSURE, config.getDouble("camera_exposure", -6.0));
-        capture.set(cv::CAP_PROP_BRIGHTNESS, config.getDouble("camera_brightness", 0.5)); // might be 0.0-1.0 or 0-255 depending on camera
-        capture.set(cv::CAP_PROP_AUTO_EXPOSURE, config.getDouble("camera_autoexposure", 0.75)); // i have no idea what this could be
-        capture.set(cv::CAP_PROP_FRAME_WIDTH, 640);
-        capture.set(cv::CAP_PROP_FRAME_HEIGHT, 480);
-        // todo: add camera autodetection
-
         cv::Mat frame, gray, decimated;
         while (g_running) {
-            if (!capture.read(frame) || frame.empty()) {
-                // Generate a proper placeholder frame (640x480, 3 channels, black)
-                cv::Mat frame(480, 640, CV_8UC3, cv::Scalar(0, 0, 0));
-                cv::putText(frame, "Frame empty.", cv::Point(50, 240),
-                cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(0, 255, 0), 2);
-                cv::putText(frame, "Reconnect camera and reboot", cv::Point(50, 300),
-                cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(0, 255, 0), 2);
+            if (!cameraManager.read(frame) || frame.empty()) {
+                cv::Mat emptyFrame(480, 640, CV_8UC3, cv::Scalar(0, 0, 0));
+                cv::putText(emptyFrame, "Frame empty.", cv::Point(50, 240),
+                            cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(0, 255, 0), 2);
+                cv::putText(emptyFrame, "Reconnect camera and reboot", cv::Point(50, 300),
+                            cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(0, 255, 0), 2);
 
                 if (httpServer.isStreaming()) {
-                        std::vector<uchar> buff_bgr;
-                        cv::imencode(".jpg", frame, buff_bgr, params);
-                        httpServer.streamFrame("/", std::string(buff_bgr.begin(), buff_bgr.end()));
+                    std::vector<uchar> buff_bgr;
+                    cv::imencode(".jpg", emptyFrame, buff_bgr, params);
+                    httpServer.streamFrame("/", std::string(buff_bgr.begin(), buff_bgr.end()));
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 continue;
@@ -405,17 +466,6 @@ int main(int argc, char** argv) {
 
             cv::Mat detectGray = gray;
             if (decimateFactor > 1) {
-                // Resize by an exact 1/decimateFactor instead of chaining
-                // pyrDown() calls. pyrDown() always halves each dimension
-                // per call, so calling it (decimateFactor - 1) times
-                // actually shrinks the image by 2^(decimateFactor-1), which
-                // only happens to equal `decimateFactor` when it's 1 or 2.
-                // For any other configured value (e.g. 3 or 4) the working
-                // image was shrunk by far more than intended, while corner
-                // and center coordinates below are scaled back up by a
-                // plain `* decimateFactor` -- silently producing badly
-                // wrong pixel coordinates (and therefore wrong poses) for
-                // every detection whenever decimate_factor wasn't 1 or 2.
                 cv::resize(gray, decimated, cv::Size(), 1.0 / decimateFactor, 1.0 / decimateFactor,
                            cv::INTER_AREA);
                 detectGray = decimated;
@@ -423,10 +473,6 @@ int main(int argc, char** argv) {
 
             gpuDetector.dispatch(detectGray);
 
-            // Turn the GPU's connected-component bounding boxes into
-            // candidate regions of interest so the (much more expensive)
-            // CPU AprilTags decoder only has to search near likely tags
-            // instead of the whole frame.
             std::vector<cv::Rect> candidateRegions;
             for (const auto& comp : gpuDetector.getComponentInfo()) {
                 candidateRegions.emplace_back(
@@ -441,12 +487,6 @@ int main(int argc, char** argv) {
             result.timestamp = timestampNow();
             result.detections.reserve(tagDets.size());
 
-            // Note: tagDets are already rescaled to full-resolution pixel
-            // coordinates by postProcessor.detect() (see cameraDecimate
-            // above), so no further corner/center scaling is needed here --
-            // and estimatePose()'s solvePnP call below is now operating in
-            // the same coordinate space as cameraMatrix/distCoeffs, which
-            // were built from a full-resolution calibration.
             for (const auto& det : tagDets) {
                 if (!det.good) continue;
                 TagDetectionData out;
@@ -456,12 +496,7 @@ int main(int argc, char** argv) {
                     result.detections.push_back(CpuPostProcessor::toTagDetectionData(det));
                 }
             }
-            //std::cout <<" Frame timestamp: " << result.timestamp << ", detections: " << result.detections.size() << "\n";
-            // Publish the frame we just built directly instead of reading it
-            // back out of sharedResults; that avoided an extra mutex lock and
-            // a full deep copy of the frame (including cv::Mat pose data) on
-            // every single detection cycle, which added needless latency to
-            // the data sent to the roboRIO.
+
             ntClient.publishDetections(result);
             sharedResults.update(std::move(result));
 
@@ -472,27 +507,22 @@ int main(int argc, char** argv) {
             }
 
             if(httpServer.isCameraSettingsRefreshQueued()) [[unlikely]] {
-                // get new settings from config and apply to camera
                 std::cout << "Refreshing camera settings from config...\n";
-                std::cout << "New exposure: " << config.getDouble("camera_exposure", -6.0) << "\n";
-                std::cout << "New brightness: " << config.getDouble("camera_brightness", 0.5) << "\n";
-                std::cout << "New autoexposure value: " << config.getDouble("camera_autoexposure", 0.75) << "\n";
-                capture.set(cv::CAP_PROP_EXPOSURE, config.getDouble("camera_exposure", -6.0));
-                capture.set(cv::CAP_PROP_BRIGHTNESS, config.getDouble("camera_brightness", 0.5));
-                capture.set(cv::CAP_PROP_AUTO_EXPOSURE , config.getDouble("camera_autoexposure", 0.75)); // i have no idea what this could be
+                cameraManager.applySettings(config);
                 httpServer.clearCameraSettingsRefreshQueue();
             }
 
             if(httpServer.isCameraSnapshotQueued()) [[unlikely]] {
-                std::cout << "Saving snapshot to " << opts.cameraSnapshotDir + "/image" + std::to_string(result.timestamp) + ".jpg" << std::endl;
-                cv::imwrite(opts.cameraSnapshotDir + "/image" + std::to_string(result.timestamp) + ".jpg", frame);
+                std::string snapshotPath = opts.cameraSnapshotDir + "/image" + std::to_string(result.timestamp) + ".jpg";
+                std::cout << "Saving snapshot to " << snapshotPath << std::endl;
+                cv::imwrite(snapshotPath, frame);
                 httpServer.clearCameraSnapshotQueue();
             }
         }
     }
 
     httpServer.stop();
-    capture.release();
+    cameraManager.release();
     glContext.destroy();
     return 0;
 }

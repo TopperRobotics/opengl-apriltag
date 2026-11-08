@@ -3,3 +3,7 @@ build
 *Zone.Identifier
 snapshots/*
 build-backup-before-nt
+.cache
+.idea
+opencv-install
+cmake-build-debug-wsl

@@ -5,6 +5,14 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" OR CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    # For GCC and Clang: Disable frame pointer omission
+    add_compile_options(-fno-omit-frame-pointer -mno-omit-leaf-frame-pointer)
+elseif(MSVC)
+    # For Microsoft Visual C++: Disable frame pointer omission (/Oy-)
+    add_compile_options(/Oy-)
+endif()
+
 find_package(OpenGL REQUIRED)
 find_package(Eigen3 REQUIRED NO_MODULE)
 find_package(PkgConfig REQUIRED QUIET)
@@ -101,6 +109,6 @@ target_link_libraries(apriltag PRIVATE
     wpiutil
 )
 
-target_compile_options(apriltag PRIVATE -Wall -Wextra -O2)
+target_compile_options(apriltag PRIVATE -Wall -Wextra -Ofast)
 
 install(TARGETS apriltag DESTINATION bin)

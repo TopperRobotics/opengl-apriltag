@@ -327,11 +327,7 @@ int GpuDetector::dispatch(const cv::Mat& grayImage) {
     std::vector<uint32_t> labels(static_cast<size_t>(w * h));
     glBindTexture(GL_TEXTURE_2D, impl->labelImgB);
     glGetTexImage(GL_TEXTURE_2D, 0, GL_RED_INTEGER, GL_UNSIGNED_INT, labels.data());
-    //std::cout << "Label image read back, first 10 labels: ";
-    //for (int i = 0; i < std::min(10, static_cast<int>(labels.size())); ++i) {
-    //    std::cout << labels[i] << " ";
-    //}
-    //std::cout << std::endl;
+    // todo: write the labels texture to disk as png for debugging
 
     // extractComponentsCPU() only needs the label image (component bounding
     // boxes/centroids/pixel counts are all derived from `labels`); it used
